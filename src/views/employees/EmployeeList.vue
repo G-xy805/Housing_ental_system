@@ -1,0 +1,1035 @@
+<template>
+  <div class="list-page">
+    <div class="page-header">
+      <div class="header-content">
+        <div class="header-left">
+          <h1 class="page-title">员工管理</h1>
+          <p class="page-subtitle">管理系统员工账户和权限</p>
+        </div>
+        <div class="header-right">
+          <el-button type="primary" @click="handleAdd" class="add-button">
+            <el-icon class="btn-icon"><Plus /></el-icon>
+            新增员工
+          </el-button>
+        </div>
+      </div>
+    </div>
+
+    <div class="filter-section">
+      <div class="filter-content">
+        <div class="filter-items">
+          <div class="filter-item">
+            <label class="filter-label">关键词</label>
+            <el-input
+              v-model="filterForm.keyword"
+              placeholder="姓名/手机号/邮箱"
+              clearable
+              @clear="handleSearch"
+              @keyup.enter="handleSearch"
+              class="filter-input"
+            />
+          </div>
+          <div class="filter-item">
+            <label class="filter-label">状态</label>
+            <el-select v-model="filterForm.status" placeholder="全部状态" clearable class="filter-select">
+              <el-option label="在职" value="active" />
+              <el-option label="离职" value="resigned" />
+              <el-option label="禁用" value="disabled" />
+            </el-select>
+          </div>
+          <div class="filter-item">
+            <label class="filter-label">角色</label>
+            <el-select v-model="filterForm.role" placeholder="全部角色" clearable class="filter-select">
+              <el-option label="管理员" value="admin" />
+              <el-option label="员工" value="staff" />
+            </el-select>
+          </div>
+        </div>
+        <div class="filter-actions">
+          <el-button type="primary" @click="handleSearch" class="search-button">
+            <el-icon class="btn-icon"><Search /></el-icon>
+            搜索
+          </el-button>
+          <el-button @click="handleReset" class="reset-button">
+            <el-icon class="btn-icon"><Refresh /></el-icon>
+            重置
+          </el-button>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-section">
+      <div class="table-container">
+        <el-table
+          v-loading="loading"
+          :data="employeeList"
+          class="data-table"
+          :header-cell-style="{ background: '#fafafa', fontWeight: '600' }"
+        >
+          <el-table-column prop="id" label="ID" min-width="60" align="center" />
+          <el-table-column prop="name" label="姓名" min-width="80">
+            <template #default="{ row }">
+              <div class="user-info">
+                <div class="user-avatar" :style="{ background: getAvatarColor(row.name) }">
+                  {{ row.name?.charAt(0) || 'U' }}
+                </div>
+                <span class="user-name">{{ row.name }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="phone" label="手机号" min-width="120" />
+          <el-table-column prop="position" label="职位" min-width="90" />
+          <el-table-column prop="role" label="角色" min-width="70" align="center">
+            <template #default="{ row }">
+              <span class="role-badge" :class="row.role">
+                {{ row.role === 'admin' ? '管理员' : '员工' }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="status" label="状态" min-width="70" align="center">
+            <template #default="{ row }">
+              <span class="status-badge" :class="row.status">
+                <span class="status-dot"></span>
+                {{ getStatusText(row.status) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" min-width="220" fixed="right" align="center">
+            <template #default="{ row }">
+              <div class="action-buttons">
+                <el-button type="primary" size="small" link @click="handleView(row)">
+                  <el-icon><View /></el-icon>
+                  详情
+                </el-button>
+                <el-button type="primary" size="small" link @click="handleEdit(row)">
+                  <el-icon><Edit /></el-icon>
+                  编辑
+                </el-button>
+                <el-button
+                  :type="row.status === 'active' ? 'warning' : 'success'"
+                  size="small"
+                  link
+                  @click="handleToggleStatus(row)"
+                >
+                  <el-icon><Switch /></el-icon>
+                  {{ row.status === 'active' ? '禁用' : '启用' }}
+                </el-button>
+                <el-button type="info" size="small" link @click="handleResetPassword(row)">
+                  <el-icon><Key /></el-icon>
+                  重置密码
+                </el-button>
+                <el-button
+                  type="danger"
+                  size="small"
+                  link
+                  @click="handleDelete(row)"
+                  :disabled="row.role === 'admin'"
+                >
+                  <el-icon><Delete /></el-icon>
+                  删除
+                </el-button>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div class="pagination-container">
+          <el-pagination
+            v-model:current-page="pagination.page"
+            v-model:page-size="pagination.per_page"
+            :page-sizes="[10, 20, 50, 100]"
+            :total="pagination.total"
+            layout="total, sizes, prev, pager, next, jumper"
+            @size-change="handleSizeChange"
+            @current-change="handlePageChange"
+          />
+        </div>
+      </div>
+    </div>
+
+    <el-dialog
+      v-model="dialogVisible"
+      :title="dialogTitle"
+      width="560px"
+      :close-on-click-modal="false"
+      class="form-dialog"
+    >
+      <el-form
+        ref="formRef"
+        :model="formData"
+        :rules="formRules"
+        label-width="100px"
+        class="form-content"
+      >
+        <el-form-item label="用户名" prop="username">
+          <el-input
+            v-model="formData.username"
+            placeholder="请输入用户名"
+            :disabled="isEdit"
+          />
+        </el-form-item>
+        <el-form-item v-if="!isEdit" label="密码" prop="password">
+          <el-input
+            v-model="formData.password"
+            type="password"
+            placeholder="请输入密码"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item label="姓名" prop="name">
+          <el-input v-model="formData.name" placeholder="请输入姓名" />
+        </el-form-item>
+        <el-form-item label="手机号" prop="phone">
+          <el-input v-model="formData.phone" placeholder="请输入手机号" />
+        </el-form-item>
+        <el-form-item label="邮箱" prop="email">
+          <el-input v-model="formData.email" placeholder="请输入邮箱" />
+        </el-form-item>
+        <el-form-item label="职位" prop="position">
+          <el-input v-model="formData.position" placeholder="请输入职位" />
+        </el-form-item>
+        <el-form-item label="角色" prop="role">
+          <el-select v-model="formData.role" placeholder="请选择角色">
+            <el-option label="管理员" value="admin" />
+            <el-option label="员工" value="staff" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="isEdit" label="状态" prop="status">
+          <el-select v-model="formData.status" placeholder="请选择状态">
+            <el-option label="在职" value="active" />
+            <el-option label="离职" value="resigned" />
+            <el-option label="禁用" value="disabled" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="dialogVisible = false" class="cancel-btn">取消</el-button>
+          <el-button type="primary" :loading="submitLoading" @click="handleSubmit" class="submit-btn">
+            确定
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="passwordDialogVisible" title="重置密码" width="420px" class="form-dialog">
+      <el-form :model="passwordForm" label-width="80px" class="form-content">
+        <el-form-item label="员工">
+          <el-input :value="currentEmployee?.name" disabled />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input
+            v-model="passwordForm.newPassword"
+            type="password"
+            placeholder="请输入新密码"
+            show-password
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="passwordDialogVisible = false" class="cancel-btn">取消</el-button>
+          <el-button type="primary" :loading="passwordLoading" @click="confirmResetPassword" class="submit-btn">
+            确定
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="detailVisible" title="员工详情" width="800px" class="detail-dialog">
+      <el-descriptions :column="2" border>
+        <el-descriptions-item label="ID">
+          {{ currentEmployee?.id }}
+        </el-descriptions-item>
+        <el-descriptions-item label="姓名">
+          {{ currentEmployee?.name }}
+        </el-descriptions-item>
+        <el-descriptions-item label="用户名">
+          {{ currentEmployee?.username }}
+        </el-descriptions-item>
+        <el-descriptions-item label="手机号">
+          {{ currentEmployee?.phone }}
+        </el-descriptions-item>
+        <el-descriptions-item label="邮箱">
+          {{ currentEmployee?.email || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="职位">
+          {{ currentEmployee?.position || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="角色">
+          <span class="role-badge" :class="currentEmployee?.role">
+            {{ roleMap[currentEmployee?.role] || '-' }}
+          </span>
+        </el-descriptions-item>
+        <el-descriptions-item label="状态">
+          <span class="status-badge" :class="currentEmployee?.status">
+            <span class="status-dot"></span>
+            {{ statusMap[currentEmployee?.status] || '-' }}
+          </span>
+        </el-descriptions-item>
+        <el-descriptions-item label="创建时间">
+          {{ formatDate(currentEmployee?.created_at) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="更新时间">
+          {{ formatDate(currentEmployee?.updated_at) }}
+        </el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="detailVisible = false">关闭</el-button>
+          <el-button type="primary" @click="handleEdit(currentEmployee)">编辑</el-button>
+        </div>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Search, Refresh, Edit, Delete, Key, Switch, View } from '@element-plus/icons-vue'
+import dayjs from 'dayjs'
+import {
+  getEmployeeList,
+  createEmployee,
+  updateEmployee,
+  updateEmployeeStatus,
+  deleteEmployee,
+  resetEmployeePassword
+} from '@/api/employee'
+
+const loading = ref(false)
+const employeeList = ref([])
+const dialogVisible = ref(false)
+const detailVisible = ref(false)
+const dialogTitle = ref('新增员工')
+const isEdit = ref(false)
+const submitLoading = ref(false)
+const formRef = ref(null)
+const currentEmployee = ref(null)
+
+const filterForm = reactive({
+  keyword: '',
+  status: '',
+  role: ''
+})
+
+const pagination = reactive({
+  page: 1,
+  per_page: 20,
+  total: 0
+})
+
+const formData = reactive({
+  username: '',
+  password: '',
+  name: '',
+  phone: '',
+  email: '',
+  position: '',
+  role: 'staff',
+  status: 'active'
+})
+
+const formRules = {
+  username: [
+    { required: true, message: '请输入用户名', trigger: 'blur' },
+    { min: 3, max: 50, message: '用户名长度在 3 到 50 个字符', trigger: 'blur' }
+  ],
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    { min: 6, message: '密码长度不能少于 6 个字符', trigger: 'blur' }
+  ],
+  name: [
+    { required: true, message: '请输入姓名', trigger: 'blur' }
+  ],
+  phone: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }
+  ],
+  email: [
+    { required: true, message: '请输入邮箱', trigger: 'blur' },
+    { type: 'email', message: '请输入正确的邮箱地址', trigger: 'blur' }
+  ],
+  role: [
+    { required: true, message: '请选择角色', trigger: 'change' }
+  ]
+}
+
+const passwordDialogVisible = ref(false)
+const passwordLoading = ref(false)
+const passwordForm = reactive({
+  newPassword: ''
+})
+
+const roleMap = {
+  admin: '管理员',
+  staff: '员工'
+}
+
+const statusMap = {
+  active: '在职',
+  resigned: '离职',
+  disabled: '禁用'
+}
+
+const avatarColors = [
+  'linear-gradient(135deg, #0F766E 0%, #14B8A6 100%)',
+  'linear-gradient(135deg, #0369A1 0%, #0EA5E9 100%)',
+  'linear-gradient(135deg, #7C3AED 0%, #A78BFA 100%)',
+  'linear-gradient(135deg, #DC2626 0%, #F87171 100%)',
+  'linear-gradient(135deg, #EA580C 0%, #FB923C 100%)',
+  'linear-gradient(135deg, #0D9488 0%, #5EEAD4 100%)'
+]
+
+const getAvatarColor = (name) => {
+  const index = name ? name.charCodeAt(0) % avatarColors.length : 0
+  return avatarColors[index]
+}
+
+const getStatusType = (status) => {
+  const types = {
+    active: 'success',
+    resigned: 'info',
+    disabled: 'danger'
+  }
+  return types[status] || 'info'
+}
+
+const getStatusText = (status) => {
+  const texts = {
+    active: '在职',
+    resigned: '离职',
+    disabled: '禁用'
+  }
+  return texts[status] || '未知'
+}
+
+const formatDate = (date) => {
+  return date ? dayjs(date).format('YYYY-MM-DD HH:mm') : '-'
+}
+
+const fetchEmployeeList = async () => {
+  loading.value = true
+  try {
+    const params = {
+      page: pagination.page,
+      per_page: pagination.per_page,
+      ...filterForm
+    }
+    const res = await getEmployeeList(params)
+    employeeList.value = res.data.items || []
+    pagination.total = res.data.pagination.total
+  } catch (error) {
+    ElMessage.error(error.message || '获取员工列表失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleSearch = () => {
+  pagination.page = 1
+  fetchEmployeeList()
+}
+
+const handleReset = () => {
+  filterForm.keyword = ''
+  filterForm.status = ''
+  filterForm.role = ''
+  handleSearch()
+}
+
+const handleSizeChange = (size) => {
+  pagination.per_page = size
+  fetchEmployeeList()
+}
+
+const handlePageChange = (page) => {
+  pagination.page = page
+  fetchEmployeeList()
+}
+
+const resetForm = () => {
+  formData.username = ''
+  formData.password = ''
+  formData.name = ''
+  formData.phone = ''
+  formData.email = ''
+  formData.position = ''
+  formData.role = 'staff'
+  formData.status = 'active'
+}
+
+const handleAdd = () => {
+  isEdit.value = false
+  dialogTitle.value = '新增员工'
+  resetForm()
+  dialogVisible.value = true
+}
+
+const handleView = (row) => {
+  currentEmployee.value = row
+  detailVisible.value = true
+}
+
+const handleEdit = (row) => {
+  isEdit.value = true
+  dialogTitle.value = '编辑员工'
+  Object.assign(formData, {
+    id: row.id,
+    username: row.username,
+    name: row.name,
+    phone: row.phone,
+    email: row.email,
+    position: row.position,
+    role: row.role,
+    status: row.status
+  })
+  dialogVisible.value = true
+}
+
+const handleSubmit = async () => {
+  if (!formRef.value) return
+  
+  await formRef.value.validate(async (valid) => {
+    if (!valid) return
+    
+    submitLoading.value = true
+    try {
+      if (isEdit.value) {
+        await updateEmployee(formData.id, formData)
+        ElMessage.success('更新成功')
+      } else {
+        await createEmployee(formData)
+        ElMessage.success('创建成功')
+      }
+      dialogVisible.value = false
+      fetchEmployeeList()
+    } catch (error) {
+      ElMessage.error(error.message || '操作失败')
+    } finally {
+      submitLoading.value = false
+    }
+  })
+}
+
+const handleToggleStatus = async (row) => {
+  const newStatus = row.status === 'active' ? 'disabled' : 'active'
+  const actionText = newStatus === 'active' ? '启用' : '禁用'
+  
+  try {
+    await ElMessageBox.confirm(`确定要${actionText}该员工吗？`, '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    
+    await updateEmployeeStatus(row.id, newStatus)
+    ElMessage.success(`${actionText}成功`)
+    fetchEmployeeList()
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.message || `${actionText}失败`)
+    }
+  }
+}
+
+const handleResetPassword = (row) => {
+  currentEmployee.value = row
+  passwordForm.newPassword = ''
+  passwordDialogVisible.value = true
+}
+
+const confirmResetPassword = async () => {
+  if (!passwordForm.newPassword) {
+    ElMessage.warning('请输入新密码')
+    return
+  }
+  
+  if (passwordForm.newPassword.length < 6) {
+    ElMessage.warning('密码长度不能少于 6 个字符')
+    return
+  }
+  
+  passwordLoading.value = true
+  try {
+    await resetEmployeePassword(currentEmployee.value.id, passwordForm.newPassword)
+    ElMessage.success('密码重置成功')
+    passwordDialogVisible = false
+  } catch (error) {
+    ElMessage.error(error.message || '密码重置失败')
+  } finally {
+    passwordLoading.value = false
+  }
+}
+
+const handleDelete = async (row) => {
+  try {
+    await ElMessageBox.confirm('确定要删除该员工吗？此操作不可恢复！', '警告', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    
+    await deleteEmployee(row.id)
+    ElMessage.success('删除成功')
+    fetchEmployeeList()
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.message || '删除失败')
+    }
+  }
+}
+
+onMounted(() => {
+  fetchEmployeeList()
+})
+</script>
+
+<style lang="scss" scoped>
+.list-page {
+  padding: 24px;
+  background: var(--bg-secondary);
+  min-height: calc(100vh - 60px);
+}
+
+.page-header {
+  margin-bottom: 24px;
+  
+  .header-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+  
+  .header-left {
+    .page-title {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 0 0 4px 0;
+    }
+    
+    .page-subtitle {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin: 0;
+    }
+  }
+  
+  .add-button {
+    height: 40px;
+    padding: 0 20px;
+    border-radius: 10px;
+    font-weight: 500;
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+    border: none;
+    box-shadow: 0 4px 12px rgba(15, 118, 110, 0.3);
+    transition: all 0.3s ease;
+    
+    &:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(15, 118, 110, 0.4);
+    }
+    
+    .btn-icon {
+      margin-right: 6px;
+    }
+  }
+}
+
+.filter-section {
+  background: white;
+  border-radius: 16px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  
+  .filter-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  
+  .filter-items {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    flex: 1;
+  }
+  
+  .filter-item {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    
+    .filter-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-regular);
+    }
+    
+    .filter-input,
+    .filter-select {
+      width: 180px;
+    }
+  }
+  
+  .filter-actions {
+    display: flex;
+    gap: 10px;
+    
+    .search-button,
+    .reset-button {
+      height: 36px;
+      padding: 0 16px;
+      border-radius: 8px;
+      font-weight: 500;
+      
+      .btn-icon {
+        margin-right: 4px;
+      }
+    }
+    
+    .search-button {
+      background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+      border: none;
+    }
+  }
+}
+
+.table-section {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  
+  .data-table {
+    width: 100%;
+    
+    :deep(.el-table__header th) {
+      background: #fafafa !important;
+      font-weight: 600;
+      color: var(--text-primary);
+      font-size: 13px;
+    }
+    
+    :deep(.el-table__row) {
+      transition: all 0.2s ease;
+      
+      &:hover {
+        background: #f8fafc !important;
+      }
+    }
+    
+    :deep(.el-table__cell) {
+      padding: 14px 0;
+    }
+  }
+  
+  .user-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    
+    .user-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 14px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    
+    .user-name {
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+  }
+  
+  .email-text {
+    color: var(--text-regular);
+    font-size: 13px;
+  }
+  
+  .role-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    
+    &.admin {
+      background: rgba(220, 38, 38, 0.1);
+      color: #DC2626;
+    }
+    
+    &.staff {
+      background: rgba(15, 118, 110, 0.1);
+      color: #0F766E;
+    }
+  }
+  
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+    
+    &.active {
+      background: rgba(16, 185, 129, 0.1);
+      color: #10B981;
+      
+      .status-dot {
+        background: #10B981;
+      }
+    }
+    
+    &.resigned {
+      background: rgba(107, 114, 128, 0.1);
+      color: #6B7280;
+      
+      .status-dot {
+        background: #6B7280;
+      }
+    }
+    
+    &.disabled {
+      background: rgba(239, 68, 68, 0.1);
+      color: #EF4444;
+      
+      .status-dot {
+        background: #EF4444;
+      }
+    }
+  }
+  
+  .date-text {
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  
+  .action-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    
+    .el-button {
+      padding: 4px 8px;
+      font-size: 12px;
+      
+      .el-icon {
+        margin-right: 2px;
+      }
+    }
+  }
+}
+
+.detail-dialog {
+  :deep(.el-dialog) {
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  
+  :deep(.el-dialog__header) {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border-secondary);
+    margin: 0;
+    
+    .el-dialog__title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+  }
+  
+  :deep(.el-dialog__body) {
+    padding: 24px;
+  }
+  
+  :deep(.el-dialog__footer) {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border-secondary);
+  }
+  
+  :deep(.el-descriptions__label) {
+    font-weight: 500;
+    width: 120px;
+  }
+  
+  .dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    
+    .cancel-btn,
+    .el-button--primary {
+      min-width: 80px;
+      border-radius: 8px;
+      font-weight: 500;
+    }
+    
+    .el-button--primary {
+      background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+      border: none;
+    }
+  }
+}
+
+.pagination-container {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-secondary);
+  
+  :deep(.el-pagination) {
+    .el-pagination__total,
+    .el-pagination__sizes,
+    .el-pagination__jump {
+      font-size: 13px;
+    }
+    
+    .btn-prev,
+    .btn-next,
+    .el-pager li {
+      border-radius: 6px;
+      min-width: 32px;
+      height: 32px;
+      line-height: 32px;
+    }
+    
+    .el-pager li.is-active {
+      background: var(--color-primary);
+      color: white;
+    }
+  }
+}
+
+.form-dialog {
+  :deep(.el-dialog) {
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  
+  :deep(.el-dialog__header) {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border-secondary);
+    margin: 0;
+    
+    .el-dialog__title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+  }
+  
+  :deep(.el-dialog__body) {
+    padding: 24px;
+  }
+  
+  :deep(.el-dialog__footer) {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border-secondary);
+  }
+  
+  .form-content {
+    :deep(.el-form-item) {
+      margin-bottom: 20px;
+      
+      .el-form-item__label {
+        font-weight: 500;
+        color: var(--text-regular);
+      }
+    }
+  }
+  
+  .dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    
+    .cancel-btn,
+    .submit-btn {
+      min-width: 80px;
+      border-radius: 8px;
+      font-weight: 500;
+    }
+    
+    .submit-btn {
+      background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+      border: none;
+    }
+  }
+}
+
+@media screen and (max-width: 768px) {
+  .list-page {
+    padding: 16px;
+  }
+  
+  .page-header {
+    .header-content {
+      flex-direction: column;
+      gap: 16px;
+    }
+    
+    .header-right {
+      width: 100%;
+      
+      .add-button {
+        width: 100%;
+      }
+    }
+  }
+  
+  .filter-section {
+    .filter-content {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    
+    .filter-items {
+      flex-direction: column;
+      
+      .filter-item {
+        .filter-input,
+        .filter-select {
+          width: 100%;
+        }
+      }
+    }
+    
+    .filter-actions {
+      width: 100%;
+      
+      .search-button,
+      .reset-button {
+        flex: 1;
+      }
+    }
+  }
+  
+  .table-section {
+    padding: 16px;
+    overflow-x: auto;
+  }
+}
+</style>

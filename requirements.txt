@@ -1,0 +1,27 @@
+# Flask Web Framework
+Flask==3.0.0
+Flask-CORS==4.0.0
+Flask-SQLAlchemy==3.1.1
+
+# Authentication
+PyJWT==2.8.0
+Werkzeug==3.0.1
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Excel Processing
+openpyxl==3.1.2
+
+# PDF Generation
+reportlab==4.0.7
+
+# Task Scheduling
+APScheduler==3.10.4
+
+# Database Driver (SQLite built-in, MySQL/PostgreSQL optional)
+# For MySQL: pip install pymysql
+# For PostgreSQL: pip install psycopg2-binary
+
+# Production Server (optional)
+# gunicorn==21.2.0

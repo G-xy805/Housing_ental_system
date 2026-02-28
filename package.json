@@ -1,0 +1,31 @@
+{
+  "name": "housing-rental-frontend",
+  "version": "1.0.0",
+  "description": "房屋租赁系统前端 - Vue 3 + Vite + Element Plus",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path .gitignore"
+  },
+  "dependencies": {
+    "@vue/shared": "^3.5.29",
+    "axios": "^1.7.0",
+    "dayjs": "^1.11.13",
+    "echarts": "^5.5.0",
+    "element-plus": "^2.8.0",
+    "lodash-es": "^4.17.23",
+    "pinia": "^2.2.0",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0",
+    "zrender": "^6.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "eslint": "^8.55.0",
+    "eslint-plugin-vue": "^9.19.2",
+    "sass": "^1.69.5",
+    "vite": "^5.0.8"
+  }
+}

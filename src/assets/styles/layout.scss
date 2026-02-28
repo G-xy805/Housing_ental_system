@@ -1,0 +1,316 @@
+/**
+ * 布局相关样式
+ */
+
+// 布局容器
+.app-container {
+  padding: 20px;
+}
+
+// 卡片容器
+.card-container {
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+// 表格容器
+.table-container {
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+  padding: 20px;
+  
+  .table-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    
+    .header-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #333;
+    }
+  }
+}
+
+// 表单容器
+.form-container {
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+  padding: 30px;
+  
+  .form-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 30px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #ebeef5;
+  }
+}
+
+// 搜索栏
+.search-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+  margin-bottom: 20px;
+  padding: 20px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  
+  .search-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    
+    .search-label {
+      white-space: nowrap;
+      color: #606266;
+      font-size: 14px;
+    }
+  }
+  
+  .search-buttons {
+    display: flex;
+    gap: 10px;
+    margin-left: auto;
+  }
+}
+
+// 分页容器
+.pagination-container {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+// 空状态
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  
+  .empty-icon {
+    font-size: 64px;
+    color: #c0c4cc;
+    margin-bottom: 20px;
+  }
+  
+  .empty-text {
+    color: #909399;
+    font-size: 14px;
+  }
+}
+
+// 加载状态
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+}
+
+// 按钮组
+.button-group {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+// 状态标签
+.status-tag {
+  &.status-success {
+    background-color: #f0f9eb;
+    color: #67c23a;
+  }
+  
+  &.status-warning {
+    background-color: #fdf6ec;
+    color: #e6a23c;
+  }
+  
+  &.status-danger {
+    background-color: #fef0f0;
+    color: #f56c6c;
+  }
+  
+  &.status-info {
+    background-color: #f4f4f5;
+    color: #909399;
+  }
+}
+
+// 描述列表
+.description-list {
+  .description-item {
+    display: flex;
+    padding: 12px 0;
+    border-bottom: 1px solid #ebeef5;
+    
+    &:last-child {
+      border-bottom: none;
+    }
+    
+    .description-label {
+      width: 120px;
+      color: #909399;
+      font-size: 14px;
+    }
+    
+    .description-value {
+      flex: 1;
+      color: #303133;
+      font-size: 14px;
+    }
+  }
+}
+
+// 统计卡片
+.stat-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  
+  .stat-content {
+    flex: 1;
+    
+    .stat-title {
+      color: #909399;
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+    
+    .stat-value {
+      color: #303133;
+      font-size: 28px;
+      font-weight: 600;
+    }
+    
+    .stat-subtitle {
+      color: #67c23a;
+      font-size: 12px;
+      margin-top: 5px;
+    }
+  }
+  
+  .stat-icon {
+    width: 60px;
+    height: 60px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    
+    &.icon-blue {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #fff;
+    }
+    
+    &.icon-green {
+      background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%);
+      color: #fff;
+    }
+    
+    &.icon-orange {
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      color: #fff;
+    }
+    
+    &.icon-cyan {
+      background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+      color: #fff;
+    }
+  }
+}
+
+// 响应式网格
+.responsive-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+// 工具类
+.mt-10 {
+  margin-top: 10px;
+}
+
+.mt-20 {
+  margin-top: 20px;
+}
+
+.mb-10 {
+  margin-bottom: 10px;
+}
+
+.mb-20 {
+  margin-bottom: 20px;
+}
+
+.ml-10 {
+  margin-left: 10px;
+}
+
+.mr-10 {
+  margin-right: 10px;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.text-right {
+  text-align: right;
+}
+
+.text-primary {
+  color: #409EFF;
+}
+
+.text-success {
+  color: #67c23a;
+}
+
+.text-warning {
+  color: #e6a23c;
+}
+
+.text-danger {
+  color: #f56c6c;
+}
+
+.text-info {
+  color: #909399;
+}
+
+// 滚动条美化
+.scrollbar-container {
+  &::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  &::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+    
+    &:hover {
+      background: #a8a8a8;
+    }
+  }
+}
