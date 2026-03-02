@@ -228,6 +228,7 @@ const router = useRouter()
 const userStore = useUserStore()
 
 const isMobile = ref(false)
+const isCollapse = ref(false)
 const isFullscreen = ref(false)
 const notificationCount = ref(3)
 const cachedViews = ref(['Dashboard'])
@@ -238,11 +239,16 @@ const routeKey = computed(() => route.fullPath)
 
 const menuRoutes = computed(() => {
   const routes = router.options.routes || []
-  return routes.filter(route => {
-    if (!route) return false
-    if (!route.meta) return true
-    return !route.meta.public
-  })
+  // 找到Layout路由，返回其children
+  const layoutRoute = routes.find(route => route.name === 'Layout')
+  if (layoutRoute && layoutRoute.children) {
+    return layoutRoute.children.filter(child => {
+      if (!child) return false
+      if (!child.meta) return true
+      return !child.meta.hidden
+    })
+  }
+  return []
 })
 
 const getMenuIcon = (iconName) => {
@@ -253,6 +259,7 @@ const getMenuIcon = (iconName) => {
     'users': UserFilled,
     'employees': UserFilled,
     'tenants': User,
+    'landlords': UserFilled,
     'payments': Money,
     'backup': Cloudy,
     'finance': DataAnalysis,

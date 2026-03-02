@@ -6,11 +6,13 @@
 
 | 模型名称 | 表名 | 描述 |
 |---------|------|------|
-| User | users | 用户表（管理员、普通员工，支持员工管理） |
-| House | houses | 房源表（支持整租/合租，含地址、配套设施） |
+| User | users | 用户表（管理员、普通员工，仅内部员工使用） |
+| Landlord | landlords | 房东表（房源所有者，含房产证信息、银行卡信息） |
+| House | houses | 房源表（支持整租/合租，含地址、配套设施，关联房东） |
 | Room | rooms | 房间表（合租场景，独立租金和状态） |
 | Tenant | tenants | 租客表（含紧急联系人、工作信息） |
 | Contract | contracts | 合同表（支持合租合同，自动编号） |
+| LandlordContract | landlord_contracts | 承包合同表（平台与房东的合作合同） |
 | Payment | payments | 支付记录表（支持滞纳金、多种支付方式） |
 | Media | media | 多媒体文件表（图片/视频/文档） |
 
@@ -20,31 +22,34 @@
 ┌─────────────┐
 │    User     │
 │  (用户表)    │
+│  内部员工     │
 └──────┬──────┘
-       │ 1:N
-       ├──────────────────────────────────────────────┐
-       │                                              │
-       ▼                                              ▼
+       │ 1:N (负责管理)
+       │
+       ▼
 ┌─────────────┐                              ┌─────────────┐
-│    House    │                              │   Tenant    │
-│  (房源表)    │                              │  (租客表)    │
+│   Landlord  │                              │   Tenant    │
+│  (房东表)    │                              │  (租客表)    │
 └──────┬──────┘                              └──────┬──────┘
        │ 1:N                                        │ 1:N
        │                                            │
-       ▼                                            ▼
+       ├──────────────────┐                         │
+       │                  │                         │
+       ▼                  ▼                         ▼
+┌─────────────┐   ┌─────────────┐          ┌─────────────┐
+│    House    │   │  Landlord   │          │  Contract   │
+│  (房源表)    │   │  Contract   │          │  (合同表)    │
+└──────┬──────┘   │ (承包合同)   │          └──────┬──────┘
+       │ 1:N       └─────────────┘                 │ 1:N
+       │                                           │
+       ▼                                           ▼
 ┌─────────────┐                              ┌─────────────┐
-│    Room     │                              │  Contract   │
-│  (房间表)    │                              │  (合同表)    │
-└──────┬──────┘                              └──────┬──────┘
-       │                                            │
-       │ N:1 (合租)                                 │ 1:N
+│    Room     │                              │   Payment   │
+│  (房间表)    │                              │  (支付表)    │
+└──────┬──────┘                              └─────────────┘
+       │
+       │ N:1 (合租)
        └────────────────────────────────────────────┘
-                                                    │
-                                                    ▼
-                                           ┌─────────────┐
-                                           │   Payment   │
-                                           │  (支付表)    │
-                                           └─────────────┘
 
 ┌─────────────┐
 │    Media    │
@@ -59,24 +64,60 @@
 ```
 
 **关系说明：**
-- User 1:N House：一个用户（房东）拥有多个房源
-- User 1:N Contract（作为房东）：一个房东有多个合同
+- User 1:N Landlord：一个员工可以管理多个房东
+- User 1:N House（作为负责人）：一个员工负责多个房源
 - User 1:N Media：一个用户上传多个媒体文件
 - User 1:N Payment（作为操作员）：一个操作员处理多个支付
+- User 1:N User（管理员创建的员工）：管理员可以创建多个员工账号
+- Landlord 1:N House：一个房东拥有多个房源
+- Landlord 1:N LandlordContract：一个房东有多个承包合同
 - House 1:N Room：一个房源有多个房间（合租模式）
-- House 1:N Contract：一个房源有多个合同
+- House 1:N Contract：一个房源有多个租赁合同
 - House 1:N Media：一个房源有多个媒体文件
 - Room N:1 Contract：房间关联到合同（合租时）
 - Tenant 1:N Contract：一个租客有多个合同
+- LandlordContract 1:N House：一个承包合同可以包含多个房源
 - Contract 1:N Payment：一个合同有多个支付记录
 
 ## 3. 表关系详细说明
 
-### 3.1 User（用户表）
+### 3.1 Landlord（房东表）
 
 **关系：**
-- 1:N → House（用户拥有多个房源）
-- 1:N → Contract（作为房东有多个合同）
+- 1:N → House（房东拥有多个房源）
+- 1:N → LandlordContract（房东有多个承包合同）
+
+**字段说明：**
+```python
+- id: 主键
+- name: 姓名
+- id_card: 身份证号（加密存储）
+- id_card_hash: 身份证号哈希（用于去重验证）
+- phone: 联系电话
+- bank_card: 银行卡号（用于打租金）
+- bank_name: 开户行名称
+- property_cert_no: 房产证编号
+- address: 房产地址
+- status: 房东状态（active-正常/inactive-停用/blacklisted-黑名单）
+- remark: 备注
+```
+
+**安全特性：**
+- 身份证号哈希存储，支持去重验证
+- to_dict() 方法自动移除敏感字段（身份证号、银行卡号等）
+
+**业务方法：**
+- set_id_card(id_card_number): 设置身份证号并生成哈希
+- verify_id_card(id_card_number): 验证身份证号是否匹配
+- to_dict(include_details): 转换为字典（自动移除敏感字段）
+
+---
+
+### 3.2 User（用户表）
+
+**关系：**
+- 1:N → Landlord（员工管理多个房东）
+- 1:N → House（作为负责人，管理多个房源）
 - 1:N → Media（用户上传多个媒体文件）
 - 1:N → Payment（操作员处理多个支付）
 - 1:N → User（管理员创建的员工）
@@ -88,7 +129,7 @@
 - email: 邮箱（唯一）
 - password_hash: 密码哈希
 - role: 角色（admin/staff）
-- user_type: 用户类型（admin/landlord/tenant）
+- user_type: 用户类型（admin-管理员/staff-员工，仅内部员工使用）
 - name: 姓名
 - phone: 手机号（唯一）
 - id_card: 身份证号
@@ -118,12 +159,13 @@
 - record_login_attempt(success): 记录登录尝试
 - to_dict(include_details): 转换为字典（自动移除敏感字段）
 
-### 3.2 House（房源表）
+### 3.3 House（房源表）
 
 **关系：**
-- N:1 → User（房源属于某个用户/房东）
+- N:1 → User（负责人，内部管理员工）
+- N:1 → Landlord（房东，房源所有者）
 - 1:N → Room（房源包含多个房间）
-- 1:N → Contract（房源有多个合同）
+- 1:N → Contract（房源有多个租赁合同）
 - 1:N → Media（房源有多个媒体文件）
 
 **字段说明：**
@@ -151,7 +193,11 @@
 - images: 房源图片列表（JSON，保留字段）
 - cover_image: 封面图片
 - rental_type: 租赁类型（whole/shared）
-- owner_id: 房东 ID（外键）
+- owner_id: 负责员工 ID（外键，内部管理）
+- landlord_id: 房东 ID（外键，房源所有者）
+- contact_name: 联系人姓名
+- contact_phone: 联系电话
+- contact_wechat: 微信号
 ```
 
 **状态管理：**
@@ -162,9 +208,9 @@
 - update_status(): 根据房间状态更新房源状态
 - get_room_count(): 获取房间数量
 - get_available_rooms(): 获取空闲房间列表
-- to_dict(): 转换为字典（包含房源和房间信息）
+- to_dict(include_landlord, is_internal): 转换为字典（支持内部/外部接口区分）
 
-### 3.3 Room（房间表）
+### 3.4 Room（房间表）
 
 **关系：**
 - N:1 → House（房间属于某个房源）
@@ -194,7 +240,7 @@
 **业务方法：**
 - to_dict(): 转换为字典（包含房源信息）
 
-### 3.4 Tenant（租客表）
+### 3.5 Tenant（租客表）
 
 **关系：**
 - 1:N → Contract（租客有多个合同）
@@ -227,13 +273,13 @@
 - get_current_houses(): 获取当前租住的房源
 - to_dict(): 转换为字典（自动移除敏感字段）
 
-### 3.5 Contract（合同表）
+### 3.6 Contract（合同表）
 
 **关系：**
 - N:1 → House（合同关联房源）
 - N:1 → Room（合同关联房间，合租时）
 - N:1 → Tenant（合同关联租客）
-- N:1 → User（合同关联房东）
+- N:1 → User（合同关联负责员工）
 - 1:N → Payment（合同有多个支付记录）
 
 **字段说明：**
@@ -265,7 +311,46 @@
 - calculate_total_rent(): 计算合同期内的总租金
 - to_dict(): 转换为字典（包含房源、房间、租客信息）
 
-### 3.6 Payment（支付表）
+---
+
+### 3.7 LandlordContract（承包合同表）
+
+**关系：**
+- N:1 → Landlord（合同关联房东）
+- 1:N → House（合同包含多个房源，通过 house_ids JSON 字段）
+
+**字段说明：**
+```python
+- id: 主键
+- contract_no: 合同编号（自动生成，唯一，格式：LC+ 年月日 +4 位随机数）
+- title: 合同标题
+- description: 合同描述
+- start_date: 开始日期
+- end_date: 结束日期
+- contract_amount: 承包总金额（元）
+- service_fee_rate: 服务费率（%）
+- minimum_fee: 最低服务费（元）
+- payment_cycle: 付款周期（月数）
+- status: 状态（draft/active/expired/terminated）
+- contract_file: 合同文件路径
+- remark: 备注
+- landlord_id: 房东 ID（外键）
+- house_ids: 承包的房源 ID 列表（JSON）
+```
+
+**业务方法：**
+- generate_contract_no(): 生成合同编号（类方法）
+- is_expired(): 检查合同是否过期
+- is_expiring_soon(days): 检查合同是否即将到期
+- get_days_until_expiry(): 获取距离到期天数
+- calculate_contract_term(): 计算合同期限（月数）
+- calculate_service_fee(): 计算服务费
+- get_houses(): 获取合同关联的所有房源
+- to_dict(): 转换为字典（包含房东信息和房源信息）
+
+---
+
+### 3.8 Payment（支付表）
 
 **关系：**
 - N:1 → Contract（支付属于某个合同）
@@ -308,7 +393,7 @@
 - get_days_until_due(): 获取距离到期天数
 - to_dict(): 转换为字典（包含合同、租客、操作员信息）
 
-### 3.7 Media（多媒体表）
+### 3.9 Media（多媒体表）
 
 **关系：**
 - N:1 → House（媒体属于某个房源）
@@ -343,7 +428,12 @@
 
 ## 4. 索引设计
 
-### 4.1 User 表索引
+### 4.1 Landlord 表索引
+- idx_landlords_phone: phone 字段索引
+- idx_landlords_id_card_hash: id_card_hash 字段索引
+- idx_landlords_status: status 字段索引
+
+### 4.2 User 表索引
 - idx_users_username: username 字段索引
 - idx_users_role: role 字段索引
 - idx_users_email: email 字段索引
@@ -351,37 +441,43 @@
 - idx_users_status: status 字段索引
 - idx_users_id_card_hash: id_card_hash 字段索引
 
-### 4.2 House 表索引
+### 4.3 House 表索引
 - idx_houses_status: status 字段索引
 - idx_houses_city: city 字段索引
 - idx_houses_district: district 字段索引
 - idx_houses_rental_type: rental_type 字段索引
 - idx_houses_owner_id: owner_id 字段索引
+- idx_houses_landlord_id: landlord_id 字段索引
 
-### 4.3 Room 表索引
+### 4.4 Room 表索引
 - idx_rooms_house_id: house_id 字段索引
 - idx_rooms_status: status 字段索引
 - idx_rooms_house_number: (house_id, room_number) 复合唯一索引
 
-### 4.4 Tenant 表索引
+### 4.5 Tenant 表索引
 - idx_tenants_phone: phone 字段索引
 - idx_tenants_id_card_hash: id_card_hash 字段索引
 - idx_tenants_status: status 字段索引
 
-### 4.5 Contract 表索引
+### 4.6 Contract 表索引
 - idx_contracts_house_id: house_id 字段索引
 - idx_contracts_room_id: room_id 字段索引
 - idx_contracts_tenant_id: tenant_id 字段索引
 - idx_contracts_status: status 字段索引
 - idx_contracts_dates: (start_date, end_date) 复合索引，用于日期范围查询
 
-### 4.6 Payment 表索引
+### 4.7 LandlordContract 表索引
+- idx_landlord_contracts_landlord_id: landlord_id 字段索引
+- idx_landlord_contracts_status: status 字段索引
+- idx_landlord_contracts_dates: (start_date, end_date) 复合索引，用于日期范围查询
+
+### 4.8 Payment 表索引
 - idx_payments_contract_id: contract_id 字段索引
 - idx_payments_status: status 字段索引
 - idx_payments_due_date: due_date 字段索引
 - idx_payments_payment_type: payment_type 字段索引
 
-### 4.7 Media 表索引
+### 4.9 Media 表索引
 - idx_media_house_id: house_id 字段索引
 - idx_media_file_type: file_type 字段索引
 - idx_media_is_cover: is_cover 字段索引
@@ -394,16 +490,20 @@
   - User.username: 用户名唯一
   - User.email: 邮箱唯一
   - User.phone: 手机号唯一
+  - Landlord.id_card_hash: 房东身份证号哈希唯一（用于去重）
   - Contract.contract_no: 合同编号唯一
+  - LandlordContract.contract_no: 承包合同编号唯一
   - Payment.payment_no: 支付编号唯一
   - Room: (house_id, room_number) 房源内房间编号唯一
 - FOREIGN KEY：外键约束，保证参照完整性
-  - House.owner_id → User.id
+  - House.owner_id → User.id（负责管理的员工）
+  - House.landlord_id → Landlord.id（房源所有者）
   - Room.house_id → House.id
   - Contract.house_id → House.id
   - Contract.room_id → Room.id（可选）
   - Contract.tenant_id → Tenant.id
-  - Contract.landlord_id → User.id
+  - Contract.landlord_id → User.id（负责员工）
+  - LandlordContract.landlord_id → Landlord.id
   - Payment.contract_id → Contract.id
   - Payment.operator_id → User.id
   - Media.house_id → House.id
@@ -475,7 +575,7 @@ from app.models import User, House, Room, Tenant, Contract, Payment, Media
 app = create_app()
 
 with app.app_context():
-    # ==================== 1. 用户管理 ====================
+    # ==================== 1. 用户与房东管理 ====================
     # 1.1 创建管理员用户
     admin = User(
         username='admin',
@@ -502,14 +602,29 @@ with app.app_context():
     db.session.add(staff)
     db.session.flush()
     
-    # 1.3 权限检查
+    # 1.3 创建房东
+    landlord = Landlord(
+        name='王房东',
+        id_card='110101199001011234',
+        phone='13700137000',
+        bank_card='6222001234567890123',
+        bank_name='中国工商银行北京分行',
+        property_cert_no='京房权证朝私字第 123456 号',
+        address='北京市朝阳区某某小区 3 号楼',
+        remark='优质房东'
+    )
+    landlord.set_id_card('110101199001011234')  # 自动生成哈希
+    db.session.add(landlord)
+    db.session.flush()
+    
+    # 1.4 权限检查
     if admin.has_permission('delete'):
         print("管理员有删除权限")
     if not staff.has_permission('delete'):
         print("普通员工无删除权限")
     
     # ==================== 2. 房源管理 ====================
-    # 2.1 创建合租房源
+    # 2.1 创建合租房源（关联房东）
     house = House(
         title='科技园区合租公寓',
         description='靠近地铁站，交通便利',
@@ -527,7 +642,8 @@ with app.app_context():
         payment_method='押一付三',
         rental_type='shared',  # 合租模式
         facilities={'wifi': True, 'ac': True, 'heater': True, 'kitchen': True},
-        owner_id=admin.id
+        owner_id=staff.id,  # 负责的员工
+        landlord_id=landlord.id  # 房东
     )
     db.session.add(house)
     db.session.flush()
@@ -590,11 +706,29 @@ with app.app_context():
         house_id=house.id,
         room_id=room1.id,  # 合租时关联房间
         tenant_id=tenant.id,
-        landlord_id=admin.id
+        landlord_id=staff.id  # 负责员工
     )
     db.session.add(contract)
     
-    # 4.2 更新房间和房源状态
+    # 4.2 创建承包合同（平台与房东的合作合同）
+    landlord_contract = LandlordContract(
+        contract_no=LandlordContract.generate_contract_no(),
+        title='平台与王房东承包合同',
+        description='承包王房东的所有房源',
+        start_date=date.today(),
+        end_date=date.today() + timedelta(days=365),
+        contract_amount=100000.0,
+        service_fee_rate=5.0,
+        minimum_fee=5000.0,
+        payment_cycle=3,
+        status='active',
+        landlord_id=landlord.id,
+        house_ids=[house.id],  # 关联的房源 ID 列表
+        remark='首次合作'
+    )
+    db.session.add(landlord_contract)
+    
+    # 4.3 更新房间和房源状态
     room1.status = 'rented'
     house.update_status()  # 自动计算房源状态
     
@@ -644,16 +778,19 @@ with app.app_context():
     db.session.commit()
     
     # ==================== 7. 查询示例 ====================
-    # 7.1 查询用户的所有房源
-    user_houses = admin.houses.all()
+    # 7.1 查询用户管理的所有房源
+    user_houses = staff.houses.all()
     
-    # 7.2 查询房源的空闲房间
+    # 7.2 查询房东的所有房源
+    landlord_houses = landlord.houses.all()
+    
+    # 7.3 查询房源的空闲房间
     available_rooms = house.get_available_rooms()
     
-    # 7.3 查询房源的房间数量
+    # 7.4 查询房源的房间数量
     room_count = house.get_room_count()
     
-    # 7.4 查询即将到期的合同
+    # 7.5 查询即将到期的租赁合同
     expiring_contracts = Contract.query.filter(
         Contract.status == 'active'
     ).all()
@@ -661,10 +798,18 @@ with app.app_context():
         if c.is_expiring_soon(30):
             print(f"合同 {c.contract_no} 即将到期，剩余 {c.get_days_until_expiry()} 天")
     
-    # 7.5 查询租客的当前租住房源
+    # 7.6 查询即将到期的承包合同
+    expiring_landlord_contracts = LandlordContract.query.filter(
+        LandlordContract.status == 'active'
+    ).all()
+    for lc in expiring_landlord_contracts:
+        if lc.is_expiring_soon(30):
+            print(f"承包合同 {lc.contract_no} 即将到期，剩余 {lc.get_days_until_expiry()} 天")
+    
+    # 7.7 查询租客的当前租住房源
     current_houses = tenant.get_current_houses()
     
-    # 7.6 查询逾期支付
+    # 7.8 查询逾期支付
     overdue_payments = Payment.query.filter(
         Payment.status == 'overdue'
     ).all()
@@ -672,18 +817,25 @@ with app.app_context():
         if p.is_overdue():
             print(f"支付 {p.payment_no} 已逾期 {p.overdue_days} 天")
     
-    # 7.7 查询房源的封面图片
+    # 7.9 查询房源的封面图片
     cover_media = Media.query.filter(
         Media.house_id == house.id,
         Media.is_cover == True
     ).first()
     
+    # 7.10 查询承包合同的服务费
+    for lc in LandlordContract.query.all():
+        service_fee = lc.calculate_service_fee()
+        print(f"承包合同 {lc.contract_no} 的服务费：{service_fee}元")
+    
     # ==================== 8. 序列化示例 ====================
     # 8.1 转换为字典（用于 API 响应）
-    house_data = house.to_dict()
+    house_data = house.to_dict(include_landlord=True, is_internal=True)
     contract_data = contract.to_dict()
     payment_data = payment.to_dict()
     tenant_data = tenant.to_dict()  # 自动移除敏感字段
+    landlord_data = landlord.to_dict(include_details=True)
+    landlord_contract_data = landlord_contract.to_dict()
     
     # 8.2 用户详细信息
     user_data = admin.to_dict(include_details=True)
@@ -733,13 +885,15 @@ SQLALCHEMY_BINDS = {
 
 本数据库模型设计具有以下特点：
 
-1. **完整性**：覆盖房源、租客、合同、支付全流程，支持整租/合租两种租赁模式
-2. **安全性**：密码加密存储、身份证号哈希验证、JWT Token认证、敏感字段过滤，权限控制完善
+1. **完整性**：覆盖房源、租客、合同、支付全流程，支持整租/合租两种租赁模式，新增房东管理和承包合同管理
+2. **安全性**：密码加密存储、身份证号哈希验证、JWT Token 认证、敏感字段过滤，权限控制完善
 3. **灵活性**：支持多种支付方式、付款周期、租赁类型，适应不同业务场景需求
 4. **可扩展**：模型设计符合 SOLID 原则，预留扩展字段，易于功能扩展
 5. **性能优化**：合理的索引设计，支持高效查询；使用延迟加载避免 N+1 查询问题
-6. **业务逻辑封装**：将业务逻辑封装在模型方法中，如合同到期检查、滞纳金计算、房源状态更新
+6. **业务逻辑封装**：将业务逻辑封装在模型方法中，如合同到期检查、滞纳金计算、房源状态更新、服务费计算
 7. **最佳实践**：遵循 SQLAlchemy ORM 规范，使用抽象基类、关系定义、序列化方法等最佳实践
 8. **数据一致性**：通过外键约束、唯一约束、NOT NULL 约束保证数据完整性
 9. **审计跟踪**：记录创建时间、更新时间、操作人等信息，便于审计追踪
 10. **用户体验**：支持多媒体文件管理、房源地理位置、配套设施管理，提升用户体验
+11. **角色分离**：User 表仅用于内部员工，Landlord 表管理房东信息，职责清晰
+12. **平台模式**：支持平台与房东的承包合作模式，通过 LandlordContract 实现灵活的商业模式

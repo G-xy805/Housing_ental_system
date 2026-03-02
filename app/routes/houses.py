@@ -5,6 +5,7 @@
 from flask import Blueprint, request, jsonify, g, current_app
 from typing import Optional, Dict, Any
 from datetime import datetime
+import re
 
 from app.models.house import House
 from app.models.room import Room
@@ -143,12 +144,15 @@ def validate_house_data(data: Dict, is_update: bool = False) -> tuple:
     if 'payment_method' in data:
         validated_data['payment_method'] = data.get('payment_method', '').strip()
     
-    # 租赁类型
+    # 租赁类型（只支持整租）
     if 'rental_type' in data:
-        if data['rental_type'] not in ['whole', 'shared']:
-            errors.append('租赁类型必须是 whole(整租) 或 shared(合租)')
+        if data['rental_type'] != 'whole':
+            errors.append('租赁类型只能是 whole(整租)')
         else:
             validated_data['rental_type'] = data['rental_type']
+    else:
+        # 默认设置为整租
+        validated_data['rental_type'] = 'whole'
     
     # 状态（仅在更新时允许）
     if is_update and 'status' in data:
@@ -174,28 +178,76 @@ def validate_house_data(data: Dict, is_update: bool = False) -> tuple:
     if 'cover_image' in data:
         validated_data['cover_image'] = data.get('cover_image', '').strip()
     
+    # 房东 ID
+    if 'landlord_id' in data:
+        try:
+            landlord_id = int(data['landlord_id']) if data['landlord_id'] else None
+            validated_data['landlord_id'] = landlord_id
+        except (ValueError, TypeError):
+            errors.append('房东 ID 必须是有效的整数')
+    
+    # 联系信息字段（可选）
+    if 'contact_name' in data:
+        contact_name = data.get('contact_name')
+        if contact_name is None:
+            validated_data['contact_name'] = None
+        else:
+            contact_name = contact_name.strip()
+            if contact_name and len(contact_name) > 50:
+                errors.append('联系人姓名不能超过 50 个字符')
+            else:
+                validated_data['contact_name'] = contact_name
+    
+    if 'contact_phone' in data:
+        contact_phone = data.get('contact_phone')
+        if contact_phone is None:
+            validated_data['contact_phone'] = None
+        else:
+            contact_phone = contact_phone.strip()
+            if contact_phone:
+                # 中国大陆手机号验证：11 位数字，以 1 开头，第二位是 3-9 之间的数字
+                phone_pattern = r'^1[3-9]\d{9}$'
+                if not re.match(phone_pattern, contact_phone):
+                    errors.append('手机号格式不正确，应为 11 位中国大陆手机号')
+                else:
+                    validated_data['contact_phone'] = contact_phone
+            else:
+                validated_data['contact_phone'] = None
+    
+    if 'contact_wechat' in data:
+        contact_wechat = data.get('contact_wechat')
+        if contact_wechat is None:
+            validated_data['contact_wechat'] = None
+        else:
+            contact_wechat = contact_wechat.strip()
+            if contact_wechat and len(contact_wechat) > 50:
+                errors.append('微信号不能超过 50 个字符')
+            else:
+                validated_data['contact_wechat'] = contact_wechat
+    
     if errors:
         return False, '; '.join(errors), None
     
     return True, None, validated_data
 
 
-def format_house_response(house: House, include_rooms: bool = False) -> Dict:
+def format_house_response(house: House, include_rooms: bool = False, is_internal: bool = True) -> Dict:
     """
     格式化房源响应数据
     
     Args:
         house: 房源对象
         include_rooms: 是否包含房间信息
+        is_internal: 是否为内部接口（默认 True，返回完整信息）
         
     Returns:
         dict: 房源响应数据
     """
-    data = house.to_dict()
+    data = house.to_dict(include_landlord=is_internal, is_internal=is_internal)
     
-    # 添加房间信息
-    if include_rooms and house.rental_type == 'shared':
-        data['rooms'] = [room.to_dict() for room in house.rooms.order_by(Room.room_number).all()]
+    # 系统只支持整租，不再返回房间信息
+    # if include_rooms and house.rental_type == 'shared':
+    #     data['rooms'] = [room.to_dict() for room in house.rooms.order_by(Room.room_number).all()]
     
     # 添加媒体文件信息
     media_list = Media.query.filter_by(house_id=house.id).order_by(Media.sort_order, Media.created_at).all()
@@ -444,6 +496,51 @@ def create_house():
         house.owner_id = g.user_id
         
         db.session.add(house)
+        db.session.flush()  # 获取房源 ID
+        
+        # 处理封面图片和图片集逻辑
+        current_app.logger.info(f"处理图片逻辑：cover_image={validated_data.get('cover_image')}, images={data.get('images', [])}")
+        
+        # 收集所有需要关联的图片 URL
+        all_image_urls = []
+        if validated_data.get('cover_image'):
+            all_image_urls.append(validated_data['cover_image'])
+        if data.get('images'):
+            for img in data['images']:
+                if isinstance(img, str):
+                    all_image_urls.append(img)
+                elif isinstance(img, dict) and img.get('file_url'):
+                    all_image_urls.append(img.get('file_url'))
+        
+        # 去重
+        all_image_urls = list(set(all_image_urls))
+        current_app.logger.info(f"需要关联的图片 URL：{all_image_urls}")
+        
+        if all_image_urls:
+            # 查找所有匹配的媒体记录（house_id 为 None 或已关联的）
+            media_records = Media.query.filter(
+                Media.file_url.in_(all_image_urls)
+            ).all()
+            
+            current_app.logger.info(f"找到 {len(media_records)} 个媒体记录")
+            
+            for media in media_records:
+                media.house_id = house.id
+                current_app.logger.info(f"关联媒体 {media.id} 到房源 {house.id}")
+            
+            # 设置封面图片
+            if validated_data.get('cover_image'):
+                # 查找封面图片并设为封面
+                cover_media = next((m for m in media_records if m.file_url == validated_data['cover_image']), None)
+                if cover_media:
+                    cover_media.is_cover = True
+                    current_app.logger.info(f"设置媒体 {cover_media.id} 为封面")
+            elif media_records:
+                # 如果没有指定封面，将第一张设为封面
+                first_media = media_records[0]
+                first_media.is_cover = True
+                current_app.logger.info(f"自动设置媒体 {first_media.id} 为封面")
+        
         db.session.commit()
         
         # 刷新获取完整数据
@@ -515,6 +612,53 @@ def update_house(house_id: int):
         # 更新房源
         for key, value in validated_data.items():
             setattr(house, key, value)
+        
+        # 处理封面图片和图片集逻辑
+        current_app.logger.info(f"处理图片逻辑：cover_image={validated_data.get('cover_image')}, images={data.get('images', [])}")
+        
+        # 收集所有需要关联的图片 URL
+        all_image_urls = []
+        if validated_data.get('cover_image'):
+            all_image_urls.append(validated_data['cover_image'])
+        if data.get('images'):
+            for img in data['images']:
+                if isinstance(img, str):
+                    all_image_urls.append(img)
+                elif isinstance(img, dict) and img.get('file_url'):
+                    all_image_urls.append(img.get('file_url'))
+        
+        # 去重
+        all_image_urls = list(set(all_image_urls))
+        current_app.logger.info(f"需要关联的图片 URL：{all_image_urls}")
+        
+        if all_image_urls:
+            # 查找所有匹配的媒体记录（house_id 为 None 或已关联的）
+            media_records = Media.query.filter(
+                Media.file_url.in_(all_image_urls)
+            ).all()
+            
+            current_app.logger.info(f"找到 {len(media_records)} 个媒体记录")
+            
+            for media in media_records:
+                media.house_id = house.id
+                current_app.logger.info(f"关联媒体 {media.id} 到房源 {house.id}")
+            
+            # 设置封面图片
+            if validated_data.get('cover_image'):
+                # 查找封面图片并设为封面
+                cover_media = next((m for m in media_records if m.file_url == validated_data['cover_image']), None)
+                if cover_media:
+                    # 取消其他封面
+                    Media.query.filter_by(house_id=house.id, is_cover=True).update({'is_cover': False})
+                    cover_media.is_cover = True
+                    current_app.logger.info(f"设置媒体 {cover_media.id} 为封面")
+            elif media_records:
+                # 如果没有指定封面，将第一张设为封面
+                # 取消其他封面
+                Media.query.filter_by(house_id=house.id, is_cover=True).update({'is_cover': False})
+                first_media = media_records[0]
+                first_media.is_cover = True
+                current_app.logger.info(f"自动设置媒体 {first_media.id} 为封面")
         
         db.session.commit()
         

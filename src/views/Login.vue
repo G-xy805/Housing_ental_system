@@ -208,6 +208,16 @@ const handleLogin = async () => {
         router.push(redirect)
       } catch (error) {
         console.error('登录失败:', error)
+        // 处理账号锁定的错误
+        if (error.response && error.response.status === 403) {
+          const errorMsg = error.response.data?.message || '账号已被锁定，请联系管理员'
+          ElMessage.error(errorMsg)
+        } else if (error.response && error.response.status === 401) {
+          const errorMsg = error.response.data?.message || '用户名或密码错误'
+          ElMessage.error(errorMsg)
+        } else {
+          ElMessage.error('登录失败，请稍后重试')
+        }
       } finally {
         loading.value = false
       }

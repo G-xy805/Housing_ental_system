@@ -47,12 +47,32 @@ export function deleteContract(id) {
 }
 
 /**
- * 生成合同文件
+ * 激活合同
  * @param {number} id 合同 ID
  * @returns {Promise}
  */
-export function generateContractFile(id) {
-  return request.post(`/contracts/${id}/generate`)
+export function activateContract(id) {
+  return request.post(`/contracts/${id}/activate`)
+}
+
+/**
+ * 终止合同
+ * @param {number} id 合同 ID
+ * @param {Object} data 终止数据
+ * @returns {Promise}
+ */
+export function terminateContract(id, data) {
+  return request.post(`/contracts/${id}/terminate`, data)
+}
+
+/**
+ * 续签合同
+ * @param {number} id 合同 ID
+ * @param {Object} data 续签数据
+ * @returns {Promise}
+ */
+export function renewContract(id, data) {
+  return request.post(`/contracts/${id}/renew`, data)
 }
 
 /**
@@ -74,12 +94,4 @@ export function getContractStats() {
   return request.get('/contracts/stats')
 }
 
-/**
- * 合同续签
- * @param {number} id 合同 ID
- * @param {Object} data 续签数据
- * @returns {Promise}
- */
-export function renewContract(id, data) {
-  return request.post(`/contracts/${id}/renew`, data)
-}
+

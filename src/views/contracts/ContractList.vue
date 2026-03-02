@@ -87,7 +87,11 @@
         <el-table-column prop="contract_no" label="合同编号" min-width="120" sortable />
         <el-table-column prop="tenant_name" label="租客姓名" min-width="100" />
         <el-table-column prop="house_address" label="房源地址" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="room_no" label="房间号" width="80" />
+        <el-table-column label="房间号" width="80">
+          <template #default="scope">
+            <span>{{ scope.row.room_no || scope.row.room_number }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="租期" min-width="150">
           <template #default="scope">
             <div class="lease-period">
@@ -102,9 +106,9 @@
             <span>¥{{ scope.row.rent_amount }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="deposit_amount" label="押金 (元)" width="100">
+        <el-table-column label="押金 (元)" width="100">
           <template #default="scope">
-            <span>¥{{ scope.row.deposit_amount }}</span>
+            <span>¥{{ scope.row.deposit_amount || scope.row.deposit }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100">
@@ -114,7 +118,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="320" fixed="right">
+        <el-table-column label="操作" width="400" fixed="right">
           <template #default="scope">
             <el-button link type="primary" @click="handleView(scope.row)">
               <el-icon><View /></el-icon>
@@ -124,10 +128,28 @@
               link
               type="primary"
               @click="handleEdit(scope.row)"
-              v-if="scope.row.status === 'pending' && hasPermission('edit')"
+              v-if="scope.row.status === 'draft' && hasPermission('edit')"
             >
               <el-icon><Edit /></el-icon>
               编辑
+            </el-button>
+            <el-button
+              link
+              type="success"
+              @click="handleActivate(scope.row)"
+              v-if="scope.row.status === 'draft' && hasPermission('edit')"
+            >
+              <el-icon><Check /></el-icon>
+              激活
+            </el-button>
+            <el-button
+              link
+              type="warning"
+              @click="handleTerminate(scope.row)"
+              v-if="scope.row.status === 'active' && hasPermission('edit')"
+            >
+              <el-icon><Close /></el-icon>
+              终止
             </el-button>
             <el-button
               link
@@ -198,7 +220,7 @@
           {{ currentContract.house_address }}
         </el-descriptions-item>
         <el-descriptions-item label="房间号">
-          {{ currentContract.room_no }}
+          {{ currentContract.room_no || currentContract.room_number }}
         </el-descriptions-item>
         <el-descriptions-item label="租赁面积">
           {{ currentContract.room_area || '-' }}㎡
@@ -210,10 +232,10 @@
           <span class="money">¥{{ currentContract.rent_amount }}</span> / 月
         </el-descriptions-item>
         <el-descriptions-item label="押金">
-          <span class="money">¥{{ currentContract.deposit_amount }}</span>
+          <span class="money">¥{{ currentContract.deposit_amount || currentContract.deposit }}</span>
         </el-descriptions-item>
         <el-descriptions-item label="支付方式">
-          {{ getPaymentText(currentContract.payment_method) }}
+          {{ getPaymentText(getPaymentMethodValue(currentContract.payment_type || currentContract.payment_method)) }}
         </el-descriptions-item>
         <el-descriptions-item label="签约日期">
           {{ currentContract.sign_date || '-' }}
@@ -259,6 +281,15 @@
         label-width="100px"
         label-position="right"
       >
+        <el-form-item label="合同标题" prop="title">
+          <el-input
+            v-model="contractForm.title"
+            placeholder="请输入合同标题"
+            style="width: 100%"
+            :disabled="isViewMode"
+          />
+        </el-form-item>
+
         <el-form-item label="租客" prop="tenant_id">
           <el-select
             v-model="contractForm.tenant_id"
@@ -299,27 +330,7 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item label="房间" prop="room_id">
-          <el-select
-            v-model="contractForm.room_id"
-            placeholder="请选择房间"
-            filterable
-            style="width: 100%"
-            :disabled="!contractForm.house_id || isViewMode"
-          >
-            <el-option
-              v-for="room in roomOptions"
-              :key="room.id"
-              :label="room.room_no"
-              :value="room.id"
-            >
-              <span>{{ room.room_no }}</span>
-              <span style="color: #8492a6; font-size: 13px; margin-left: 10px">
-                (¥{{ room.rent_price }}/月)
-              </span>
-            </el-option>
-          </el-select>
-        </el-form-item>
+        <!-- 房间选择已移除，系统只支持整租房源 -->
 
         <el-form-item label="租期" prop="lease_term">
           <el-date-picker
@@ -414,7 +425,7 @@
         style="margin-bottom: 20px"
       >
         即将为合同 <strong>{{ currentContract.contract_no }}</strong> 办理续签，
-        租客：{{ currentContract.tenant_name }}，房间：{{ currentContract.room_no }}
+        租客：{{ currentContract.tenant_name }}
       </el-alert>
       <el-form
         ref="renewFormRef"
@@ -476,6 +487,56 @@
         </div>
       </template>
     </el-dialog>
+
+    <!-- 合同终止对话框 -->
+    <el-dialog
+      v-model="terminateVisible"
+      title="合同终止"
+      width="600px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-alert
+        title="终止提示"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 20px"
+      >
+        即将终止合同 <strong>{{ currentTerminateContract?.contract_no }}</strong>，
+        租客：{{ currentTerminateContract?.tenant_name }}
+      </el-alert>
+      <el-form
+        :model="terminateForm"
+        label-width="100px"
+        label-position="right"
+      >
+        <el-form-item label="终止日期">
+          <el-date-picker
+            v-model="terminateForm.terminate_date"
+            type="date"
+            style="width: 100%"
+            value-format="YYYY-MM-DD"
+          />
+        </el-form-item>
+        <el-form-item label="终止原因">
+          <el-input
+            v-model="terminateForm.reason"
+            type="textarea"
+            :rows="3"
+            placeholder="请输入终止原因"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="terminateVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleTerminateSubmit" :loading="submitLoading">
+            确定
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -497,10 +558,12 @@ import {
   createContract,
   updateContract,
   deleteContract,
+  activateContract,
+  terminateContract,
   renewContract
 } from '@/api/contract'
 import { getTenantList } from '@/api/tenant'
-import { getHouseList } from '@/api/house'
+import { getHouseList, getHouseDetail } from '@/api/house'
 import { useUserStore } from '@/store/user'
 import { hasPermission } from '@/utils/permission'
 import dayjs from 'dayjs'
@@ -542,9 +605,9 @@ const pagination = reactive({
 
 // 合同表单
 const contractForm = reactive({
+  title: '',
   tenant_id: null,
   house_id: null,
-  room_id: null,
   lease_term: [],
   rent_amount: 0,
   deposit_amount: 0,
@@ -562,9 +625,9 @@ const renewForm = reactive({
 
 // 表单验证规则
 const formRules = {
+  title: [{ required: true, message: '请输入合同标题', trigger: 'blur' }],
   tenant_id: [{ required: true, message: '请选择租客', trigger: 'change' }],
   house_id: [{ required: true, message: '请选择房源', trigger: 'change' }],
-  room_id: [{ required: true, message: '请选择房间', trigger: 'change' }],
   lease_term: [
     {
       required: true,
@@ -645,6 +708,30 @@ const getPaymentText = (method) => {
   return texts[method] || method
 }
 
+// 支付方式值映射（前端 -> 后端）
+const getPaymentTypeValue = (method) => {
+  const mapping = {
+    press_one_pay_one: '月付',
+    press_one_pay_three: '季付',
+    press_one_pay_six: '半年付',
+    press_one_pay_twelve: '年付',
+    custom: '自定义'
+  }
+  return mapping[method] || '季付'
+}
+
+// 支付方式值反向映射（后端 -> 前端）
+const getPaymentMethodValue = (type) => {
+  const mapping = {
+    '月付': 'press_one_pay_one',
+    '季付': 'press_one_pay_three',
+    '半年付': 'press_one_pay_six',
+    '年付': 'press_one_pay_twelve',
+    '自定义': 'custom'
+  }
+  return mapping[type] || 'press_one_pay_three'
+}
+
 // 格式化中文日期
 const formatChineseDate = (dateStr) => {
   if (!dateStr) return '-'
@@ -653,6 +740,61 @@ const formatChineseDate = (dateStr) => {
     return date.format('YYYY 年 M 月 D 日')
   } catch (error) {
     return dateStr
+  }
+}
+
+// 终止合同对话框
+const terminateVisible = ref(false)
+const terminateForm = reactive({
+  reason: '',
+  terminate_date: dayjs().format('YYYY-MM-DD')
+})
+const currentTerminateContract = ref(null)
+
+// 终止合同
+const handleTerminate = (row) => {
+  currentTerminateContract.value = { ...row }
+  terminateForm.reason = ''
+  terminateForm.terminate_date = dayjs().format('YYYY-MM-DD')
+  terminateVisible.value = true
+}
+
+// 提交终止
+const handleTerminateSubmit = async () => {
+  if (!currentTerminateContract.value) return
+  
+  submitLoading.value = true
+  try {
+    const data = {
+      reason: terminateForm.reason,
+      terminate_date: terminateForm.terminate_date
+    }
+    
+    await terminateContract(currentTerminateContract.value.id, data)
+    ElMessage.success('合同终止成功')
+    
+    terminateVisible.value = false
+    loadContractList()
+  } catch (error) {
+    console.error('终止合同失败:', error)
+    ElMessage.error('终止合同失败：' + (error.message || '请稍后重试'))
+  } finally {
+    submitLoading.value = false
+  }
+}
+
+// 激活合同
+const handleActivate = async (row) => {
+  submitLoading.value = true
+  try {
+    await activateContract(row.id)
+    ElMessage.success('合同激活成功')
+    loadContractList()
+  } catch (error) {
+    console.error('激活合同失败:', error)
+    ElMessage.error('激活合同失败：' + (error.message || '请稍后重试'))
+  } finally {
+    submitLoading.value = false
   }
 }
 
@@ -720,7 +862,6 @@ const resetForm = () => {
   Object.assign(contractForm, {
     tenant_id: null,
     house_id: null,
-    room_id: null,
     lease_term: [],
     rent_amount: 0,
     deposit_amount: 0,
@@ -755,27 +896,30 @@ const loadTenantOptions = async () => {
 // 加载房源选项
 const loadHouseOptions = async () => {
   try {
-    const res = await getHouseList({ page: 1, per_page: 100 })
+    const res = await getHouseList({ page: 1, per_page: 100, rental_type: 'whole' })
     houseOptions.value = res.data?.items || []
   } catch (error) {
     console.error('加载房源列表失败:', error)
   }
 }
 
-// 房源变化时加载房间
+// 房源变化时加载信息
 const handleHouseChange = async (houseId) => {
-  roomOptions.value = []
-  contractForm.room_id = null
-  
   if (!houseId) return
   
   try {
-    const houseDetail = houseOptions.value.find(h => h.id === houseId)
-    if (houseDetail && houseDetail.rooms) {
-      roomOptions.value = houseDetail.rooms
+    // 调用房源详情接口获取房源数据
+    const res = await getHouseDetail(houseId)
+    if (res.data) {
+      // 记录房源信息
+      const houseData = res.data
+      
+      // 设置默认租金和押金
+      contractForm.rent_amount = houseData.rent_price || 0
+      contractForm.deposit_amount = houseData.deposit || 0
     }
   } catch (error) {
-    console.error('加载房间列表失败:', error)
+    console.error('加载房源详情失败:', error)
   }
 }
 
@@ -803,37 +947,29 @@ const handleView = async (row) => {
 }
 
 // 编辑合同
-const handleEdit = (row) => {
+const handleEdit = async (row) => {
   dialogTitle.value = '编辑合同'
   isViewMode.value = false
   currentContract.value = { ...row }
   
   // 填充表单数据
-  Object.assign(contractForm, {
-    tenant_id: row.tenant_id || null,
-    house_id: row.house_id || null,
-    room_id: row.room_id || null,
-    lease_term: row.start_date && row.end_date ? [row.start_date, row.end_date] : [],
-    rent_amount: parseFloat(row.rent_amount) || 0,
-    deposit_amount: parseFloat(row.deposit_amount) || 0,
-    payment_method: row.payment_method || 'press_one_pay_three',
-    remark: row.remark || ''
-  })
-  
-  // 加载房间选项
-  if (row.house_id) {
-    const house = houseOptions.value.find(h => h.id === row.house_id)
-    if (house && house.rooms) {
-      roomOptions.value = house.rooms
-    }
-  }
+    Object.assign(contractForm, {
+      title: row.title || '',
+      tenant_id: row.tenant_id || null,
+      house_id: row.house_id || null,
+      lease_term: row.start_date && row.end_date ? [row.start_date, row.end_date] : [],
+      rent_amount: parseFloat(row.rent_amount) || 0,
+      deposit_amount: parseFloat(row.deposit_amount || row.deposit) || 0,
+      payment_method: getPaymentMethodValue(row.payment_type || row.payment_method),
+      remark: row.remark || ''
+    })
   
   dialogVisible.value = true
 }
 
 // 从详情页编辑
-const handleEditFromDetail = () => {
-  handleEdit(currentContract.value)
+const handleEditFromDetail = async () => {
+  await handleEdit(currentContract.value)
   detailVisible.value = false
 }
 
@@ -867,15 +1003,16 @@ const handleSubmit = async () => {
   
   submitLoading.value = true
   try {
+    // 构建提交数据
     const data = {
+      title: contractForm.title,
       tenant_id: contractForm.tenant_id,
       house_id: contractForm.house_id,
-      room_id: contractForm.room_id,
       start_date: contractForm.lease_term[0],
       end_date: contractForm.lease_term[1],
       rent_amount: contractForm.rent_amount,
-      deposit_amount: contractForm.deposit_amount,
-      payment_method: contractForm.payment_method,
+      deposit: contractForm.deposit_amount,
+      payment_type: getPaymentTypeValue(contractForm.payment_method),
       remark: contractForm.remark
     }
     
@@ -904,7 +1041,7 @@ const handleRenew = (row) => {
   
   // 设置默认值
   renewForm.rent_amount = parseFloat(row.rent_amount) || 0
-  renewForm.deposit_amount = parseFloat(row.deposit_amount) || 0
+  renewForm.deposit_amount = parseFloat(row.deposit_amount || row.deposit) || 0
   
   renewVisible.value = true
 }
@@ -938,7 +1075,7 @@ const handleRenewSubmit = async () => {
       start_date: renewForm.lease_term[0],
       end_date: renewForm.lease_term[1],
       rent_amount: renewForm.rent_amount,
-      deposit_amount: renewForm.deposit_amount,
+      deposit: renewForm.deposit_amount,
       remark: renewForm.remark
     }
     

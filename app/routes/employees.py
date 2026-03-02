@@ -51,14 +51,15 @@ def validate_employee_data(data: Dict, is_update: bool = False) -> tuple:
         else:
             validated_data['phone'] = data['phone'].strip()
     
-    # 邮箱（必填）
-    if not is_update or 'email' in data:
-        if not data.get('email'):
-            errors.append('邮箱不能为空')
-        elif '@' not in data.get('email', ''):
+    # 邮箱（可选）
+    if 'email' in data and data.get('email'):
+        if '@' not in data.get('email', ''):
             errors.append('邮箱格式不正确')
         else:
             validated_data['email'] = data['email'].strip()
+    else:
+        # 如果没有提供邮箱，设置为 None
+        validated_data['email'] = None
     
     # 身份证号（可选）
     if 'id_card' in data and data.get('id_card'):
@@ -90,14 +91,14 @@ def validate_employee_data(data: Dict, is_update: bool = False) -> tuple:
             validated_data['password'] = data['password']
     
     # 角色（可选，默认 staff）
-    if 'role' in data:
+    if 'role' in data and data.get('role'):
         if data['role'] not in ['admin', 'staff']:
             errors.append('角色必须是 admin 或 staff')
         else:
             validated_data['role'] = data['role']
     
-    # 状态（仅在更新时允许）
-    if is_update and 'status' in data:
+    # 状态（可选，默认 active）
+    if 'status' in data:
         if data['status'] not in ['active', 'resigned', 'disabled']:
             errors.append('状态必须是 active(在职)、resigned(离职) 或 disabled(禁用)')
         else:
@@ -383,18 +384,28 @@ def create_employee():
             return APIResponse.bad_request("手机号已存在")
         
         # 检查邮箱是否重复
-        if check_email_duplicate(validated_data['email']):
+        if 'email' in validated_data and check_email_duplicate(validated_data['email']):
             return APIResponse.bad_request("邮箱已存在")
+        
+        # 如果没有提供邮箱，生成一个基于用户名的邮箱
+        if 'email' not in validated_data or not validated_data['email']:
+            validated_data['email'] = f"{validated_data['username']}@example.com"
+        
+        # 移除密码字段（将通过 set_password 方法设置）
+        password = validated_data.pop('password')
+        
+        # 移除身份证号字段（将通过 set_id_card 方法设置）
+        id_card = validated_data.pop('id_card', None)
         
         # 创建员工
         user = User(**validated_data)
         
         # 设置密码
-        user.set_password(validated_data['password'])
+        user.set_password(password)
         
         # 设置身份证号
-        if 'id_card' in validated_data:
-            user.set_id_card(validated_data['id_card'])
+        if id_card:
+            user.set_id_card(id_card)
         
         # 设置创建人
         user.created_by = getattr(g, 'user_id', None)
@@ -533,6 +544,12 @@ def delete_employee(employee_id: int):
             return APIResponse.bad_request("不允许删除自己的账号")
         
         employee_name = user.name
+        
+        # 处理关联的房源：将负责的房源转移给当前管理员
+        from app.models.house import House
+        houses = House.query.filter_by(owner_id=employee_id).all()
+        for house in houses:
+            house.owner_id = g.user_id
         
         # 删除员工
         db.session.delete(user)
@@ -685,3 +702,105 @@ def reset_employee_password(employee_id: int):
         db.session.rollback()
         current_app.logger.error(f"重置密码失败：{str(e)}")
         return APIResponse.server_error("重置密码失败")
+
+
+# ============================================================================
+# 批量操作
+# ============================================================================
+
+@employees_bp.route('/batch-action', methods=['POST'])
+@login_required
+@admin_required
+def batch_action():
+    """
+    批量操作
+    
+    Request Body:
+        {
+            "user_ids": [1, 2, 3],
+            "action": "disable"  // enable, disable, delete
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return APIResponse.bad_request("请求数据不能为空")
+        
+        user_ids = data.get('user_ids', [])
+        action = data.get('action')
+        
+        if not user_ids:
+            return APIResponse.bad_request("员工 ID 列表不能为空")
+        
+        if action not in ['enable', 'disable', 'delete']:
+            return APIResponse.bad_request("操作必须是 enable, disable 或 delete")
+        
+        # 不允许对管理员进行操作
+        admin_users = User.query.filter(User.id.in_(user_ids), User.role == 'admin').all()
+        if admin_users:
+            return APIResponse.bad_request(f"不允许对管理员账号进行操作")
+        
+        # 不允许删除自己
+        if action == 'delete' and g.user_id in user_ids:
+            return APIResponse.bad_request("不允许删除自己的账号")
+        
+        count = 0
+        for user_id in user_ids:
+            user = User.query.get(user_id)
+            if user:
+                if action == 'enable':
+                    user.status = 'active'
+                    user.login_attempts = 0
+                    user.locked_until = None
+                elif action == 'disable':
+                    user.status = 'disabled'
+                    user.login_attempts = 0
+                    user.locked_until = None
+                elif action == 'delete':
+                    db.session.delete(user)
+                count += 1
+        
+        db.session.commit()
+        
+        return APIResponse.success(
+            {'count': count},
+            f"批量{action}操作成功，共处理 {count} 个员工"
+        )
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"批量操作失败：{str(e)}")
+        return APIResponse.server_error("批量操作失败")
+
+
+# ============================================================================
+# 统计接口
+# ============================================================================
+
+@employees_bp.route('/stats', methods=['GET'])
+@login_required
+@admin_required
+def get_employee_stats():
+    """获取员工统计信息"""
+    try:
+        total = User.query.count()
+        by_role = {
+            'admin': User.query.filter(User.role == 'admin').count(),
+            'staff': User.query.filter(User.role == 'staff').count()
+        }
+        by_status = {
+            'active': User.query.filter(User.status == 'active').count(),
+            'resigned': User.query.filter(User.status == 'resigned').count(),
+            'disabled': User.query.filter(User.status == 'disabled').count()
+        }
+        
+        return APIResponse.success({
+            'total': total,
+            'by_role': by_role,
+            'by_status': by_status
+        }, "获取员工统计成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取员工统计失败：{str(e)}")
+        return APIResponse.server_error("获取员工统计失败")

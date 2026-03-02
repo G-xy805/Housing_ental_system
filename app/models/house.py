@@ -54,7 +54,13 @@ class House(BaseModel):
     rental_type = db.Column(db.String(20), default='whole', comment='租赁类型')
     
     # 外键
-    owner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, comment='房东 ID')
+    owner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, comment='负责员工 ID（内部员工管理）')
+    landlord_id = db.Column(db.Integer, db.ForeignKey('landlords.id'), nullable=True, comment='房东 ID（房源所有者）')
+    
+    # 房东联系信息
+    contact_name = db.Column(db.String(50), comment='联系人姓名')
+    contact_phone = db.Column(db.String(20), comment='联系电话')
+    contact_wechat = db.Column(db.String(50), comment='微信号')
     
     # 索引
     __table_args__ = (
@@ -63,12 +69,15 @@ class House(BaseModel):
         db.Index('idx_houses_district', 'district'),
         db.Index('idx_houses_rental_type', 'rental_type'),
         db.Index('idx_houses_owner_id', 'owner_id'),
+        db.Index('idx_houses_landlord_id', 'landlord_id'),
     )
     
     # 关系
-    rooms = db.relationship('Room', backref='house', lazy='dynamic', cascade='all, delete-orphan')
+    landlord_rel = db.relationship('Landlord', back_populates='houses', lazy='joined', foreign_keys=[landlord_id])
+    owner = db.relationship('User', back_populates='houses', lazy='joined', foreign_keys=[owner_id])  # 负责的员工
+    rooms = db.relationship('Room', backref='house', lazy='dynamic')
     contracts = db.relationship('Contract', backref='house', lazy='dynamic')
-    media = db.relationship('Media', backref='house', lazy='dynamic', cascade='all, delete-orphan', foreign_keys='Media.house_id')
+    media = db.relationship('Media', backref='house', lazy='dynamic', foreign_keys='Media.house_id')
     
     def update_status(self):
         """
@@ -116,11 +125,46 @@ class House(BaseModel):
         """获取空闲房间列表"""
         return self.rooms.filter(Room.status == 'available').all()
     
-    def to_dict(self):
-        """转换为字典"""
+    def to_dict(self, include_landlord=False, is_internal=False):
+        """
+        转换为字典
+        
+        Args:
+            include_landlord: 是否包含房东信息（默认 False，用于租客接口）
+                           True 时返回房东信息（用于内部接口）
+            is_internal: 是否为内部接口（True 时返回完整信息，False 时过滤敏感信息）
+        
+        Returns:
+            dict: 房源数据字典
+        """
         data = super().to_dict()
+        
+        # 添加负责员工信息
         if self.owner:
             data['owner_name'] = self.owner.username
+        
+        # 添加房东信息（仅当 include_landlord=True 且 is_internal=True 时）
+        if include_landlord and is_internal and self.landlord_rel:
+            data['landlord'] = self.landlord_rel.to_dict(include_details=True)
+            data['landlord_name'] = self.landlord_rel.name
+            data['landlord_phone'] = self.landlord_rel.phone
+        elif include_landlord and not is_internal:
+            # 外部接口：仅显示脱敏的联系信息
+            data['landlord_name'] = '平台管家'  # 不显示真实房东姓名
+            data['landlord_phone'] = None  # 不显示房东电话
+        
+        # 添加联系信息字段（根据内部/外部接口决定是否显示）
+        if is_internal:
+            # 内部接口：显示完整联系信息
+            data['contact_name'] = self.contact_name
+            data['contact_phone'] = self.contact_phone
+            data['contact_wechat'] = self.contact_wechat
+        else:
+            # 外部接口：脱敏处理或隐藏
+            data['contact_name'] = None
+            data['contact_phone'] = None
+            data['contact_wechat'] = None
+        
         # 简化处理，避免在列表查询时加载过多关联数据
         try:
             data['room_count_actual'] = self.rooms.count()
@@ -128,6 +172,7 @@ class House(BaseModel):
         except:
             data['room_count_actual'] = 0
             data['available_rooms'] = []
+        
         return data
     
     def __repr__(self):

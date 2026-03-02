@@ -70,3 +70,7 @@ htmlcov/
 
 # PyCharm
 .iml
+public/
+
+.trae/
+docs/

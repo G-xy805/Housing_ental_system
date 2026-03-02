@@ -24,8 +24,8 @@
         <!-- 图片轮播 -->
         <el-card class="image-card">
           <el-carousel
-            v-model:current-page="currentImageIndex"
-            trigger="click"
+            ref="carouselRef"
+            @change="handleCarouselChange"
             arrow="always"
             height="400px"
             v-if="imageList.length > 0"
@@ -33,12 +33,23 @@
             <el-carousel-item v-for="(image, index) in imageList" :key="index">
               <el-image
                 :src="image"
+                :alt="`房源图片${index + 1}`"
                 fit="contain"
                 class="carousel-image"
                 :preview-src-list="imageList"
                 :initial-index="index"
                 preview-teleported
-              />
+                hide-on-click-modal
+                :hide-on-modal-click="true"
+                @error="handleImageError"
+              >
+                <template #error>
+                  <div class="image-error">
+                    <el-icon :size="50"><Picture /></el-icon>
+                    <span>图片加载失败</span>
+                  </div>
+                </template>
+              </el-image>
             </el-carousel-item>
           </el-carousel>
           <el-empty v-else description="暂无图片" :image-size="100" />
@@ -50,9 +61,21 @@
               :key="index"
               class="thumbnail-item"
               :class="{ active: currentImageIndex === index }"
-              @click="currentImageIndex = index"
+              @click="handleThumbnailClick(index)"
             >
-              <el-image :src="image" fit="cover" class="thumbnail-image" />
+              <el-image 
+                :src="image" 
+                fit="cover" 
+                class="thumbnail-image"
+                :alt="`缩略图${index + 1}`"
+                @error="handleThumbnailError($event, index)"
+              >
+                <template #error>
+                  <div class="thumbnail-error">
+                    <el-icon :size="20"><Picture /></el-icon>
+                  </div>
+                </template>
+              </el-image>
             </div>
           </div>
         </el-card>
@@ -73,7 +96,7 @@
               {{ houseData.title }}
             </el-descriptions-item>
             <el-descriptions-item label="房源类型">
-              {{ getTypeText(houseData.type) }}
+              {{ getTypeText(houseData.rental_type) }}
             </el-descriptions-item>
             <el-descriptions-item label="房源状态">
               <el-tag :type="getStatusType(houseData.status)" size="small">
@@ -136,7 +159,7 @@
         </el-card>
 
         <!-- 房间列表（合租模式） -->
-        <el-card class="rooms-card" v-if="houseData.type === 'shared' && houseData.rooms && houseData.rooms.length > 0">
+        <el-card class="rooms-card" v-if="houseData.rental_type === 'shared' && houseData.rooms && houseData.rooms.length > 0">
           <template #header>
             <span class="card-title">房间列表</span>
           </template>
@@ -157,27 +180,27 @@
         <!-- 联系卡片 -->
         <el-card class="contact-card">
           <template #header>
-            <span class="card-title">联系信息</span>
+            <span class="card-title">房东信息</span>
           </template>
           <div class="contact-info">
             <div class="contact-item">
               <el-icon class="contact-icon"><User /></el-icon>
               <div class="contact-content">
-                <span class="contact-label">联系人</span>
+                <span class="contact-label">房东</span>
                 <span class="contact-value">{{ houseData.contact_name || '暂无' }}</span>
               </div>
             </div>
             <div class="contact-item">
               <el-icon class="contact-icon"><Phone /></el-icon>
               <div class="contact-content">
-                <span class="contact-label">联系电话</span>
+                <span class="contact-label">房东电话</span>
                 <span class="contact-value">{{ houseData.contact_phone || '暂无' }}</span>
               </div>
             </div>
             <div class="contact-item">
               <el-icon class="contact-icon"><ChatDotRound /></el-icon>
               <div class="contact-content">
-                <span class="contact-label">微信</span>
+                <span class="contact-label">房东微信</span>
                 <span class="contact-value">{{ houseData.contact_wechat || '暂无' }}</span>
               </div>
             </div>
@@ -200,14 +223,6 @@
             <span class="card-title">房源统计</span>
           </template>
           <div class="stats-list">
-            <div class="stat-item">
-              <span class="stat-label">浏览次数</span>
-              <span class="stat-value">{{ houseData.view_count || 0 }}</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">收藏次数</span>
-              <span class="stat-value">{{ houseData.favorite_count || 0 }}</span>
-            </div>
             <div class="stat-item">
               <span class="stat-label">发布时间</span>
               <span class="stat-value">{{ formatDate(houseData.created_at) }}</span>
@@ -236,13 +251,14 @@
         :submit-loading="formSubmitLoading"
         @submit="handleFormSubmit"
         @cancel="dialogVisible = false"
+        @submit-success="handleSubmitSuccess"
       />
     </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -253,7 +269,8 @@ import {
   CircleCheck,
   User,
   Phone,
-  ChatDotRound
+  ChatDotRound,
+  Picture
 } from '@element-plus/icons-vue'
 import { getHouseDetail as getHouseDetailApi, deleteHouse } from '@/api/house'
 import { useHouseStore } from '@/store/house'
@@ -270,13 +287,17 @@ const loading = ref(false)
 const dialogVisible = ref(false)
 const formSubmitLoading = ref(false)
 const houseFormRef = ref(null)
+const carouselRef = ref(null)
 const currentImageIndex = ref(0)
+
+// 默认占位图片
+const DEFAULT_IMAGE = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMTUwIiB2aWV3Qm94PSIwIDAgMjAwIDE1MCI+PHJlY3QgZmlsbD0iI2Y1ZjdmYSIgd2lkdGg9IjIwMCIgaGVpZ2h0PSIxNTAiLz48cGF0aCBmaWxsPSIjZDBkM2Q0IiBkPSJNMTAwIDUwYTIwIDIwIDAgMSAxIDAgNDAgMjAgMjAgMCAxIDEgMC00MHptLTQwIDQwYTIwIDIwIDAgMSAxIDAgNDAgMjAgMjAgMCAxIDEgMC00MHptODAgMGEyMCAyMCAwIDEgMSAwIDQwIDIwIDIwIDAgMSAxIDAtNDB6Ii8+PC9zdmc+'
 
 // 房源数据
 const houseData = ref({
   id: null,
   title: '',
-  type: 'whole',
+  rental_type: 'whole',
   status: 'available',
   city: '',
   district: '',
@@ -299,8 +320,6 @@ const houseData = ref({
   contact_name: '',
   contact_phone: '',
   contact_wechat: '',
-  view_count: 0,
-  favorite_count: 0,
   created_at: '',
   updated_at: ''
 })
@@ -311,13 +330,67 @@ const editData = ref({})
 // 图片列表
 const imageList = computed(() => {
   const list = []
+  const seen = new Set() // 用于去重
+  
+  // 处理 cover_image
   if (houseData.value.cover_image) {
-    list.push(houseData.value.cover_image)
+    const coverImage = houseData.value.cover_image
+    list.push(coverImage)
+    seen.add(coverImage)
   }
+  
+  // 处理 images 数组
   if (houseData.value.images && Array.isArray(houseData.value.images)) {
-    list.push(...houseData.value.images)
+    for (const img of houseData.value.images) {
+      if (img && !seen.has(img)) {
+        list.push(img)
+        seen.add(img)
+      }
+    }
   }
-  return list
+  
+  // 处理 media 字段（兼容后端可能返回的 media 数据）
+  if (houseData.value.media) {
+    let mediaList = []
+    // 支持多种 media 格式
+    if (Array.isArray(houseData.value.media)) {
+      mediaList = houseData.value.media
+    } else if (typeof houseData.value.media === 'string') {
+      // 如果是 JSON 字符串，尝试解析
+      try {
+        mediaList = JSON.parse(houseData.value.media)
+      } catch (e) {
+        console.warn('media 字段解析失败:', e)
+      }
+    } else if (houseData.value.media.images) {
+      mediaList = houseData.value.media.images
+    }
+    
+    if (Array.isArray(mediaList)) {
+      for (const img of mediaList) {
+        const imgUrl = typeof img === 'string' ? img : img.file_url || img.url || img.image
+        if (imgUrl && !seen.has(imgUrl)) {
+          list.push(imgUrl)
+          seen.add(imgUrl)
+        }
+      }
+    }
+  }
+  
+  return list.filter(img => img && typeof img === 'string')
+})
+
+// 监听 imageList 变化，重置 currentImageIndex
+watch(imageList, (newList) => {
+  if (newList.length === 0) {
+    currentImageIndex.value = 0
+  } else if (currentImageIndex.value >= newList.length) {
+    currentImageIndex.value = 0
+    // 确保轮播图同步
+    if (carouselRef.value) {
+      carouselRef.value.setActiveItem(0)
+    }
+  }
 })
 
 // 权限检查
@@ -340,7 +413,8 @@ const getStatusText = (status) => {
   const texts = {
     available: '可租',
     rented: '已租',
-    maintenance: '维修中'
+    maintenance: '维修中',
+    partially_rented: '部分已租'
   }
   return texts[status] || status
 }
@@ -424,13 +498,50 @@ const formatDate = (date) => {
   return new Date(date).toLocaleString('zh-CN')
 }
 
+// 轮播图切换事件
+const handleCarouselChange = (index) => {
+  currentImageIndex.value = index
+}
+
+// 点击缩略图
+const handleThumbnailClick = (index) => {
+  currentImageIndex.value = index
+  if (carouselRef.value) {
+    carouselRef.value.setActiveItem(index)
+  }
+}
+
+// 图片加载错误处理
+const handleImageError = (error) => {
+  console.warn('图片加载失败:', error)
+  // 可以在这里添加错误统计逻辑
+}
+
+// 缩略图加载错误处理
+const handleThumbnailError = (event, index) => {
+  console.warn(`缩略图${index + 1}加载失败`)
+  // 设置默认图片
+  if (event.target) {
+    event.target.src = DEFAULT_IMAGE
+  }
+}
+
 // 加载房源详情
 const loadHouseDetail = async () => {
   loading.value = true
   try {
     const res = await getHouseDetailApi(route.params.id)
-    houseData.value = res.data || {}
-    editData.value = { ...res.data }
+    const data = res.data || {}
+    
+    // 处理配套设施数据：从 facilities 对象转换为 amenities 数组
+    if (data.facilities && typeof data.facilities === 'object' && !Array.isArray(data.amenities)) {
+      data.amenities = Object.keys(data.facilities).filter(key => data.facilities[key])
+    }
+    
+    houseData.value = data
+    editData.value = { ...data }
+    // 重置图片索引
+    currentImageIndex.value = 0
   } catch (error) {
     console.error('加载房源详情失败:', error)
     ElMessage.error('加载房源详情失败')
@@ -463,6 +574,9 @@ const handleDelete = () => {
       router.push('/houses')
     } catch (error) {
       console.error('删除失败:', error)
+      // 显示后端返回的错误消息
+      const errorMessage = error.response?.data?.error?.message || error.message || '删除失败，请重试'
+      ElMessage.error(errorMessage)
     }
   }).catch(() => {})
 }
@@ -485,16 +599,32 @@ const handleViewRoom = (room) => {
   ElMessage.info('房间详情功能待实现')
 }
 
+// 提交成功回调
+let submitSuccessCallback = null
+
+const handleSubmitSuccess = (callback) => {
+  submitSuccessCallback = callback
+}
+
 // 表单提交
 const handleFormSubmit = async (data) => {
   formSubmitLoading.value = true
   try {
-    await houseStore.editHouse(houseData.value.id, data)
+    const result = await houseStore.editHouse(houseData.value.id, data)
     ElMessage.success('编辑成功')
+    
+    // 调用成功回调，返回房源数据
+    if (submitSuccessCallback) {
+      submitSuccessCallback(result)
+      submitSuccessCallback = null
+    }
+    
     dialogVisible.value = false
     loadHouseDetail()
   } catch (error) {
     console.error('提交失败:', error)
+    // 抛出错误，让子组件知道提交失败
+    throw error
   } finally {
     formSubmitLoading.value = false
   }
@@ -530,6 +660,18 @@ onMounted(() => {
       object-fit: contain;
     }
 
+    .image-error {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      background: #f5f7fa;
+      color: #909399;
+      gap: 10px;
+    }
+
     .thumbnail-list {
       display: flex;
       gap: 10px;
@@ -545,6 +687,7 @@ onMounted(() => {
         cursor: pointer;
         border: 2px solid transparent;
         transition: all 0.3s;
+        background: #f5f7fa;
 
         &:hover {
           border-color: #409eff;
@@ -558,6 +701,16 @@ onMounted(() => {
           width: 100%;
           height: 100%;
           object-fit: cover;
+        }
+
+        .thumbnail-error {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 100%;
+          height: 100%;
+          background: #f5f7fa;
+          color: #909399;
         }
       }
     }

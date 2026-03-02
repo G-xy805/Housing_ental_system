@@ -65,3 +65,20 @@ export function deleteEmployee(id) {
 export function resetEmployeePassword(id, newPassword) {
   return request.post(`/employees/${id}/reset-password`, { new_password: newPassword })
 }
+
+/**
+ * 批量操作员工
+ * @param {Object} data { user_ids, action }
+ * @returns {Promise}
+ */
+export function batchActionEmployees(data) {
+  return request.post('/employees/batch-action', data)
+}
+
+/**
+ * 获取员工统计信息
+ * @returns {Promise}
+ */
+export function getEmployeeStats() {
+  return request.get('/employees/stats')
+}

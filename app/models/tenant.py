@@ -3,6 +3,7 @@
 """
 from datetime import datetime
 from .base import db, BaseModel
+from app.utils.encryption import encrypt_sensitive_data, decrypt_sensitive_data
 
 
 class Tenant(BaseModel):
@@ -19,8 +20,7 @@ class Tenant(BaseModel):
     name = db.Column(db.String(50), nullable=False, comment='姓名')
     
     # 身份证号（加密存储）
-    id_card = db.Column(db.String(18), nullable=False, comment='身份证号')
-    id_card_hash = db.Column(db.String(64), comment='身份证号哈希（用于去重验证）')
+    id_card_encrypted = db.Column(db.Text, comment='身份证号（加密存储）')
     
     # 联系方式
     phone = db.Column(db.String(20), nullable=False, comment='联系电话')
@@ -44,7 +44,6 @@ class Tenant(BaseModel):
     # 索引
     __table_args__ = (
         db.Index('idx_tenants_phone', 'phone'),
-        db.Index('idx_tenants_id_card_hash', 'id_card_hash'),
         db.Index('idx_tenants_status', 'status'),
     )
     
@@ -52,15 +51,17 @@ class Tenant(BaseModel):
     contracts = db.relationship('Contract', back_populates='tenant_rel', lazy='dynamic')
     
     def set_id_card(self, id_card_number):
-        """设置身份证号并生成哈希"""
-        import hashlib
-        self.id_card = id_card_number
-        self.id_card_hash = hashlib.sha256(id_card_number.encode()).hexdigest()
+        """设置身份证号并加密存储"""
+        self.id_card_encrypted = encrypt_sensitive_data(id_card_number)
+    
+    def get_id_card(self):
+        """获取解密后的身份证号"""
+        return decrypt_sensitive_data(self.id_card_encrypted)
     
     def verify_id_card(self, id_card_number):
         """验证身份证号是否匹配"""
-        import hashlib
-        return self.id_card_hash == hashlib.sha256(id_card_number.encode()).hexdigest()
+        decrypted = self.get_id_card()
+        return decrypted == id_card_number
     
     def get_active_contracts(self):
         """获取当前有效的合同"""
@@ -79,8 +80,7 @@ class Tenant(BaseModel):
         """转换为字典"""
         data = super().to_dict()
         # 移除敏感字段
-        data.pop('id_card', None)
-        data.pop('id_card_hash', None)
+        data.pop('id_card_encrypted', None)
         return data
     
     def __repr__(self):

@@ -8,6 +8,7 @@ from typing import Optional, List, Union
 
 from .jwt import get_token_from_request, verify_token, JWTError, TokenExpiredError, TokenInvalidError, TokenMissingError
 from app.models.user import User
+from app.models import db
 
 
 def token_required(f):
@@ -32,7 +33,7 @@ def token_required(f):
             payload = verify_token(token)
             
             # 从数据库获取用户信息
-            user = User.query.get(payload['user_id'])
+            user = db.session.query(User).get(payload['user_id'])
             if not user:
                 return jsonify({
                     'success': False,
@@ -111,7 +112,16 @@ def login_required(f):
         
         try:
             payload = verify_token(token)
-            user = User.query.get(payload['user_id'])
+            if not payload:
+                return jsonify({
+                    'success': False,
+                    'error': {
+                        'code': 'token_invalid',
+                        'message': '无效的登录凭证'
+                    }
+                }), 401
+            
+            user = db.session.query(User).get(payload['user_id'])
             
             if not user:
                 return jsonify({
@@ -171,7 +181,16 @@ def admin_required(f):
         
         try:
             payload = verify_token(token)
-            user = User.query.get(payload['user_id'])
+            if not payload:
+                return jsonify({
+                    'success': False,
+                    'error': {
+                        'code': 'token_invalid',
+                        'message': '无效的登录凭证'
+                    }
+                }), 401
+            
+            user = db.session.query(User).get(payload['user_id'])
             
             if not user:
                 return jsonify({
@@ -245,7 +264,7 @@ def role_required(*roles: str):
             
             try:
                 payload = verify_token(token)
-                user = User.query.get(payload['user_id'])
+                user = db.session.query(User).get(payload['user_id'])
                 
                 if not user:
                     return jsonify({
@@ -320,7 +339,7 @@ def permission_required(permission: str):
             
             try:
                 payload = verify_token(token)
-                user = User.query.get(payload['user_id'])
+                user = db.session.query(User).get(payload['user_id'])
                 
                 if not user:
                     return jsonify({
@@ -384,7 +403,7 @@ def optional_login(f):
         if token:
             try:
                 payload = verify_token(token)
-                user = User.query.get(payload['user_id'])
+                user = db.session.query(User).get(payload['user_id'])
                 
                 if user:
                     g.current_user = user
@@ -395,6 +414,52 @@ def optional_login(f):
             except (TokenExpiredError, TokenInvalidError):
                 # Token 无效时忽略，作为未登录处理
                 pass
+        
+        return f(*args, **kwargs)
+    
+    return decorated
+
+
+def landlord_access_log(f):
+    """
+    房东信息访问日志装饰器
+    记录用户访问房东信息的操作日志
+    
+    Args:
+        f: 被装饰的函数
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # 获取当前用户信息
+        current_user = getattr(g, 'current_user', None)
+        user_id = getattr(g, 'user_id', None)
+        username = getattr(g, 'username', 'unknown')
+        
+        # 获取请求信息
+        endpoint = request.endpoint
+        method = request.method
+        path = request.path
+        
+        # 记录访问日志
+        try:
+            current_app.logger.info(
+                f"房东信息访问：用户 {username}(ID: {user_id}) 访问 {path} [{method}]"
+            )
+            # 可以在这里添加数据库保存逻辑
+            # from app.models.access_log import AccessLog
+            # access_log = AccessLog(
+            #     user_id=user_id,
+            #     username=username,
+            #     action='view_landlord_info',
+            #     endpoint=endpoint,
+            #     method=method,
+            #     path=path,
+            #     ip_address=request.remote_addr
+            # )
+            # db.session.add(access_log)
+            # db.session.commit()
+        except Exception as e:
+            current_app.logger.error(f"记录房东信息访问日志失败：{str(e)}")
         
         return f(*args, **kwargs)
     

@@ -156,7 +156,7 @@ def register():
             user_type = 'tenant'
         
         # 检查用户名是否已存在
-        existing_user = User.query.filter_by(username=username).first()
+        existing_user = db.session.query(User).filter_by(username=username).first()
         if existing_user:
             return jsonify({
                 'success': False,
@@ -167,7 +167,7 @@ def register():
             }), 400
         
         # 检查邮箱是否已存在
-        existing_email = User.query.filter_by(email=email).first()
+        existing_email = db.session.query(User).filter_by(email=email).first()
         if existing_email:
             return jsonify({
                 'success': False,
@@ -297,10 +297,10 @@ def login():
         
         # 查找用户（支持用户名或邮箱登录）
         try:
-            user = User.query.filter(
+            user = db.session.query(User).filter(
                 (User.username == username) | (User.email == username)
             ).first()
-            current_app.logger.error(f"查询用户结果: {user}")
+            current_app.logger.error(f"查询用户结果：{user}")
         except Exception as e:
             current_app.logger.error(f"查询用户失败: {str(e)}")
             return jsonify({
@@ -746,7 +746,7 @@ def verify_current_token():
         
         try:
             payload = verify_token(token)
-            user = User.query.get(payload['user_id'])
+            user = db.session.query(User).get(payload['user_id'])
             
             if not user:
                 return jsonify({
@@ -827,7 +827,7 @@ def lock_user(user_id: int):
                 }
             }), 403
         
-        user = User.query.get(user_id)
+        user = db.session.query(User).get(user_id)
         if not user:
             return jsonify({
                 'success': False,
@@ -837,7 +837,7 @@ def lock_user(user_id: int):
                 }
             }), 404
         
-        # TODO: 实现用户锁定逻辑
+        # TODO: 实现用户解锁逻辑
         # user.is_locked = True
         # db.session.commit()
         

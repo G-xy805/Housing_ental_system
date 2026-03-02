@@ -217,7 +217,8 @@ def save_file(file, file_type: str, sub_folder: str = None) -> tuple:
 
 def create_media_record(file_path: str, file_url: str, file_type: str, 
                        file_size: int, mime_type: str, house_id: int = None,
-                       description: str = None, sort_order: int = 0) -> Media:
+                       description: str = None, sort_order: int = 0,
+                       is_cover: bool = False) -> Media:
     """
     创建媒体记录
     
@@ -230,6 +231,7 @@ def create_media_record(file_path: str, file_url: str, file_type: str,
         house_id: 房源 ID
         description: 描述
         sort_order: 排序
+        is_cover: 是否封面
         
     Returns:
         Media: 媒体对象
@@ -244,7 +246,8 @@ def create_media_record(file_path: str, file_url: str, file_type: str,
         description=description,
         sort_order=sort_order,
         house_id=house_id,
-        uploaded_by=g.user_id if g else None
+        uploaded_by=g.user_id if g else None,
+        is_cover=is_cover
     )
     
     db.session.add(media)
@@ -307,7 +310,14 @@ def upload_files():
             return APIResponse.bad_request("未选择任何文件")
         
         # 获取其他参数
-        house_id = request.form.get('house_id', type=int)
+        house_id = None
+        house_id_str = request.form.get('house_id')
+        if house_id_str:
+            try:
+                house_id = int(house_id_str)
+            except (ValueError, TypeError):
+                house_id = None
+        
         file_type_filter = request.form.get('file_type')  # image/video
         descriptions_str = request.form.get('descriptions', '[]')
         
@@ -449,9 +459,22 @@ def upload_images():
             }
         }
     """
-    # 设置文件类型限制
-    request.form['file_type'] = 'image'
-    return upload_files()
+    # 调用通用上传函数，传递文件类型限制
+    from flask import request
+    
+    # 创建一个可变的表单数据副本
+    form_data = dict(request.form)
+    form_data['file_type'] = 'image'
+    
+    # 临时替换 request.form
+    original_form = request.form
+    request.form = form_data
+    
+    try:
+        return upload_files()
+    finally:
+        # 恢复原始 request.form
+        request.form = original_form
 
 
 @upload_bp.route('/video', methods=['POST'])
@@ -478,9 +501,22 @@ def upload_videos():
             }
         }
     """
-    # 设置文件类型限制
-    request.form['file_type'] = 'video'
-    return upload_files()
+    # 调用通用上传函数，传递文件类型限制
+    from flask import request
+    
+    # 创建一个可变的表单数据副本
+    form_data = dict(request.form)
+    form_data['file_type'] = 'video'
+    
+    # 临时替换 request.form
+    original_form = request.form
+    request.form = form_data
+    
+    try:
+        return upload_files()
+    finally:
+        # 恢复原始 request.form
+        request.form = original_form
 
 
 @upload_bp.route('/house/<int:house_id>', methods=['POST'])
@@ -587,7 +623,7 @@ def upload_house_files(house_id: int):
                 })
                 continue
             
-            # 创建媒体记录
+            # 创建媒体记录，直接传入 is_cover 参数
             media = create_media_record(
                 file_path=file_path,
                 file_url=file_url,
@@ -595,12 +631,9 @@ def upload_house_files(house_id: int):
                 file_size=file_size,
                 mime_type=mime_type,
                 house_id=house_id,
-                sort_order=max_sort + idx + 1
+                sort_order=max_sort + idx + 1,
+                is_cover=(is_cover and idx == 0)  # 第一个文件且指定了 is_cover
             )
-            
-            # 如果是第一个文件且指定了 is_cover，设为封面
-            if is_cover and idx == 0:
-                media.is_cover = True
             
             db.session.flush()
             
@@ -614,13 +647,6 @@ def upload_house_files(house_id: int):
             })
         
         db.session.commit()
-        
-        # 如果上传了文件且指定 is_cover，但没有设置封面，将第一个设为封面
-        if is_cover and uploaded_files:
-            first_media = Media.query.get(uploaded_files[0]['id'])
-            if first_media:
-                first_media.is_cover = True
-                db.session.commit()
         
         current_app.logger.info(
             f"用户 {g.username} 为房源 {house_id} 上传了 {len(uploaded_files)} 个文件"

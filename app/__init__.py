@@ -89,6 +89,10 @@ def init_extensions(app):
     # 创建数据库表
     with app.app_context():
         db.create_all()
+        
+        # 创建默认管理员用户
+        from app.models.user import create_default_admin
+        create_default_admin()
 
 
 def register_blueprints(app):
@@ -133,6 +137,18 @@ def register_blueprints(app):
     from app.routes.users import users_bp
     app.register_blueprint(users_bp)
     
+    # 注册承包合同管理蓝图
+    from app.routes.landlord_contracts import landlord_contracts_bp
+    app.register_blueprint(landlord_contracts_bp)
+    
+    # 注册房东管理蓝图
+    from app.routes.landlords import landlords_bp
+    app.register_blueprint(landlords_bp)
+    
+    # 注册对外房源查询蓝图
+    from app.routes.public_houses import public_houses_bp
+    app.register_blueprint(public_houses_bp)
+    
     # 初始化自动备份任务
     from app.routes.backup import init_auto_backup
     init_auto_backup(app)
@@ -156,7 +172,9 @@ def register_blueprints(app):
                 'auth': '/api/auth',
                 'users': '/api/users',
                 'employees': '/api/employees',
-                'houses': '/api/houses',
+                'landlords': '/api/landlords',
+                'houses': '/api/houses (内部接口，包含房东信息)',
+                'public_houses': '/api/public/houses (对外接口，不含房东信息)',
                 'rooms': '/api/houses/:id/rooms',
                 'tenants': '/api/tenants',
                 'contracts': '/api/contracts',

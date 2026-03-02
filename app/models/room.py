@@ -52,6 +52,8 @@ class Room(BaseModel):
     def to_dict(self):
         """转换为字典"""
         data = super().to_dict()
+        # 添加room_no字段，兼容前端使用
+        data['room_no'] = data.get('room_number', '')
         if self.house:
             data['house_title'] = self.house.title
             data['house_address'] = self.house.address

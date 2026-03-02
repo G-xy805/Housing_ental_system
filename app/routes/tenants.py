@@ -149,16 +149,15 @@ def check_id_card_duplicate(id_card: str, exclude_id: int = None) -> Optional[Te
     Returns:
         Tenant or None: 如果存在则返回租客对象
     """
-    query = Tenant.query.filter(Tenant.id_card_hash == Tenant.set_id_card(id_card).__class__.__module__)
-    # 使用 sha256 哈希查询
-    import hashlib
-    id_card_hash = hashlib.sha256(id_card.encode()).hexdigest()
-    query = Tenant.query.filter(Tenant.id_card_hash == id_card_hash)
-    
-    if exclude_id:
-        query = query.filter(Tenant.id != exclude_id)
-    
-    return query.first()
+    # 由于身份证号是加密存储的，我们需要检查所有租客的身份证号
+    # 注意：这种方法在租客数量较多时可能会影响性能
+    tenants = Tenant.query.all()
+    for tenant in tenants:
+        if tenant.get_id_card() == id_card:
+            if exclude_id and tenant.id == exclude_id:
+                continue
+            return tenant
+    return None
 
 
 # ============================================================================
@@ -366,10 +365,11 @@ def create_tenant():
         if existing_tenant:
             return APIResponse.bad_request("该身份证号已登记在其他租客名下")
         
-        # 创建租客
-        tenant = Tenant(**validated_data)
+        # 创建租客（排除 id_card 字段，因为模型中没有这个字段）
+        tenant_data = {k: v for k, v in validated_data.items() if k != 'id_card'}
+        tenant = Tenant(**tenant_data)
         
-        # 设置身份证号（会自动生成哈希）
+        # 设置身份证号（会自动加密存储）
         if 'id_card' in validated_data:
             tenant.set_id_card(validated_data['id_card'])
         

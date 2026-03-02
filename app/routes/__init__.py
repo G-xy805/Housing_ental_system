@@ -12,6 +12,8 @@ from app.routes.statistics import statistics_bp
 from app.routes.backup import backup_bp, init_auto_backup
 from app.routes.employees import employees_bp
 from app.routes.users import users_bp
+from app.routes.landlord_contracts import landlord_contracts_bp
+from app.routes.public_houses import public_houses_bp
 
 __all__ = [
     'auth_bp', 
@@ -24,5 +26,7 @@ __all__ = [
     'backup_bp',
     'employees_bp',
     'users_bp',
+    'landlord_contracts_bp',
+    'public_houses_bp',
     'init_auto_backup'
 ]

@@ -58,7 +58,7 @@ class Payment(BaseModel):
     receipt_file = db.Column(db.String(255), comment='收据/凭证文件路径')
     
     # 外键
-    contract_id = db.Column(db.Integer, db.ForeignKey('contracts.id'), nullable=False, comment='合同 ID')
+    contract_id = db.Column(db.Integer, db.ForeignKey('contracts.id'), comment='合同 ID')
     
     # 操作人
     operator_id = db.Column(db.Integer, db.ForeignKey('users.id'), comment='操作人 ID')
@@ -73,6 +73,7 @@ class Payment(BaseModel):
     
     # 关系
     operator = db.relationship('User', foreign_keys=[operator_id])
+    contract_rel = db.relationship('Contract', back_populates='payments', lazy='joined')
     
     # 支付类型映射
     PAYMENT_TYPES = {
@@ -179,11 +180,11 @@ class Payment(BaseModel):
     def to_dict(self):
         """转换为字典"""
         data = super().to_dict()
-        if self.contract:
-            data['contract_no'] = self.contract.contract_no
-            if self.contract.tenant_rel:
-                data['tenant_name'] = self.contract.tenant_rel.name
-                data['tenant_phone'] = self.contract.tenant_rel.phone
+        if self.contract_rel:
+            data['contract_no'] = self.contract_rel.contract_no
+            if self.contract_rel.tenant_rel:
+                data['tenant_name'] = self.contract_rel.tenant_rel.name
+                data['tenant_phone'] = self.contract_rel.tenant_rel.phone
         if self.operator:
             data['operator_name'] = self.operator.username
         data['total_amount'] = self.get_total_amount()
@@ -199,8 +200,8 @@ class Payment(BaseModel):
     def to_dict(self):
         """转换为字典"""
         data = super().to_dict()
-        if self.contract:
-            data['contract_no'] = self.contract.contract_no
+        if self.contract_rel:
+            data['contract_no'] = self.contract_rel.contract_no
         if self.operator:
             data['operator_name'] = self.operator.username
         return data

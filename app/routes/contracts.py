@@ -61,21 +61,8 @@ def validate_contract_data(data: Dict, is_update: bool = False) -> tuple:
             except (ValueError, TypeError):
                 errors.append('房源 ID 必须是有效的整数')
     
-    # 房间 ID（合租时必填）
-    if 'room_id' in data:
-        try:
-            room_id = int(data['room_id']) if data['room_id'] else None
-            if room_id:
-                room = Room.query.get(room_id)
-                if not room:
-                    errors.append('房间不存在')
-                else:
-                    # 验证房间是否属于指定房源
-                    if 'house_id' in validated_data and room.house_id != validated_data['house_id']:
-                        errors.append('房间不属于指定的房源')
-                    validated_data['room_id'] = room_id
-        except (ValueError, TypeError):
-            errors.append('房间 ID 必须是有效的整数')
+    # 系统只支持整租，不需要房间 ID
+    # 移除房间 ID 相关的验证逻辑
     
     # 租客 ID（必填）
     if not is_update or 'tenant_id' in data:
@@ -130,12 +117,14 @@ def validate_contract_data(data: Dict, is_update: bool = False) -> tuple:
                 errors.append('租金金额必须是有效的数字')
     
     # 押金金额（必填）
-    if not is_update or 'deposit' in data:
-        if not data.get('deposit'):
+    # 支持 deposit 和 deposit_amount 两种字段名
+    deposit_value = data.get('deposit') or data.get('deposit_amount')
+    if not is_update or ('deposit' in data or 'deposit_amount' in data):
+        if not deposit_value:
             errors.append('押金金额不能为空')
         else:
             try:
-                deposit = float(data['deposit'])
+                deposit = float(deposit_value)
                 if deposit < 0:
                     errors.append('押金金额不能为负数')
                 validated_data['deposit'] = deposit
@@ -256,6 +245,21 @@ def get_contracts():
         }
     """
     try:
+        # 先更新所有过期的合同状态
+        today = date.today()
+        expired_contracts = Contract.query.filter(
+            Contract.status == 'active',
+            Contract.end_date < today
+        ).all()
+        
+        for contract in expired_contracts:
+            contract.status = 'expired'
+            if contract.house:
+                contract.house.update_status()
+        
+        if expired_contracts:
+            db.session.commit()
+        
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 20, type=int), 100)
@@ -452,23 +456,17 @@ def create_contract():
         if house.status == 'maintenance':
             return APIResponse.bad_request("房源正在维护中，无法创建合同")
         
-        # 如果是合租房源，检查房间是否已租
-        if 'room_id' in validated_data:
-            room = Room.query.get(validated_data['room_id'])
-            if room.status == 'rented':
-                return APIResponse.bad_request("房间已被租用")
+        # 字段名映射：将 deposit 映射为 deposit_amount
+        if 'deposit' in validated_data:
+            validated_data['deposit_amount'] = validated_data.pop('deposit')
         
         # 创建合同
         contract = Contract(**validated_data)
         contract.contract_no = Contract.generate_contract_no()
-        contract.landlord_id = g.user_id
         
         db.session.add(contract)
         
-        # 如果是合租房源，更新房间状态
-        if 'room_id' in validated_data:
-            room = Room.query.get(validated_data['room_id'])
-            room.status = 'rented'
+        # 系统只支持整租，不需要更新房间状态
         
         # 更新房源状态
         house.update_status()
@@ -526,12 +524,12 @@ def update_contract(contract_id: int):
             return APIResponse.not_found("合同不存在")
         
         # 检查权限
-        if contract.landlord_id != g.user_id and g.user_role != 'admin':
+        if contract.house and contract.house.owner_id != g.user_id and g.user_role != 'admin':
             return APIResponse.forbidden("您没有权限编辑此合同")
         
         # 已生效的合同不能随意修改关键信息
         if contract.status == 'active':
-            restricted_fields = ['house_id', 'room_id', 'tenant_id', 'start_date', 'end_date']
+            restricted_fields = ['house_id', 'tenant_id', 'start_date', 'end_date']
             data = request.get_json() or {}
             for field in restricted_fields:
                 if field in data:
@@ -605,11 +603,7 @@ def delete_contract(contract_id: int):
         
         contract_no = contract.contract_no
         
-        # 如果是合租房源，释放房间
-        if contract.room_id:
-            room = Room.query.get(contract.room_id)
-            if room:
-                room.status = 'available'
+        # 系统只支持整租，不需要释放房间
         
         # 删除合同（级联删除支付记录）
         db.session.delete(contract)
@@ -668,7 +662,7 @@ def renew_contract(contract_id: int):
             return APIResponse.not_found("合同不存在")
         
         # 检查权限
-        if contract.landlord_id != g.user_id and g.user_role != 'admin':
+        if contract.house and contract.house.owner_id != g.user_id and g.user_role != 'admin':
             return APIResponse.forbidden("您没有权限操作此合同")
         
         # 检查合同状态
@@ -742,6 +736,56 @@ def renew_contract(contract_id: int):
         return APIResponse.server_error("合同续签失败")
 
 
+@contracts_bp.route('/<int:contract_id>/activate', methods=['POST'])
+@login_required
+@permission_required('edit')
+def activate_contract(contract_id: int):
+    """
+    合同激活
+    
+    Path Parameters:
+        contract_id: 合同 ID
+        
+    Response:
+        {
+            "success": true,
+            "message": "合同激活成功",
+            "data": {...}
+        }
+    """
+    try:
+        contract = Contract.query.get(contract_id)
+        
+        if not contract:
+            return APIResponse.not_found("合同不存在")
+        
+        # 检查权限
+        if contract.house and contract.house.owner_id != g.user_id and g.user_role != 'admin':
+            return APIResponse.forbidden("您没有权限操作此合同")
+        
+        # 检查合同状态
+        if contract.status not in ['draft']:
+            return APIResponse.bad_request("只有草稿状态的合同才能激活")
+        
+        # 更新合同状态
+        contract.status = 'active'
+        
+        # 更新房源状态
+        if contract.house:
+            contract.house.update_status()
+        
+        db.session.commit()
+        
+        current_app.logger.info(f"用户 {g.username} 激活了合同 {contract.contract_no}")
+        
+        return APIResponse.success(contract.to_dict(), "合同激活成功")
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"合同激活失败：{str(e)}")
+        return APIResponse.server_error("合同激活失败")
+
+
 @contracts_bp.route('/<int:contract_id>/terminate', methods=['POST'])
 @login_required
 @permission_required('edit')
@@ -773,7 +817,7 @@ def terminate_contract(contract_id: int):
             return APIResponse.not_found("合同不存在")
         
         # 检查权限
-        if contract.landlord_id != g.user_id and g.user_role != 'admin':
+        if contract.house and contract.house.owner_id != g.user_id and g.user_role != 'admin':
             return APIResponse.forbidden("您没有权限操作此合同")
         
         # 检查合同状态
@@ -797,11 +841,7 @@ def terminate_contract(contract_id: int):
         contract.status = 'terminated'
         contract.remark = (contract.remark or '') + f"\n合同于{terminate_date}终止，原因：{data.get('reason', '无')}"
         
-        # 如果是合租房源，释放房间
-        if contract.room_id:
-            room = Room.query.get(contract.room_id)
-            if room:
-                room.status = 'available'
+        # 系统只支持整租，不需要释放房间
         
         # 更新房源状态
         if contract.house:
@@ -987,67 +1027,40 @@ def generate_payment_plan(contract: Contract):
         if months <= 0:
             return
         
-        # 根据付款类型生成支付记录
-        payment_cycle = contract.payment_cycle  # 付款周期（月数）
+        # 只生成一个租金支付记录
+        amount = contract.rent_amount * months
         
-        current_date = start_date
-        payment_count = 0
+        # 计算支付周期
+        period_start = start_date
+        period_end = end_date
         
-        while current_date < end_date:
-            payment_count += 1
-            
-            # 计算本期支付金额
-            amount = contract.rent_amount * payment_cycle
-            
-            # 计算本期支付周期
-            period_start = current_date
-            period_end = current_date.replace(
-                month=current_date.month + payment_cycle
-            ) if current_date.month + payment_cycle <= 12 else \
-                current_date.replace(
-                    year=current_date.year + (current_date.month + payment_cycle - 1) // 12,
-                    month=(current_date.month + payment_cycle - 1) % 12 + 1
-                )
-            
-            if period_end > end_date:
-                period_end = end_date
-            
-            # 计算应缴日期（每月初）
-            due_date = current_date.replace(day=1)
-            
-            # 创建支付记录
-            payment = Payment(
-                payment_no=Payment.generate_payment_no(),
-                contract_id=contract.id,
-                payment_type='rent',
-                amount=amount,
-                paid_amount=0,
-                period_start=period_start,
-                period_end=period_end,
-                due_date=due_date,
-                status='pending',
-                late_fee_rate=0.0005,  # 日利率 0.05%
-                remark=f'第{payment_count}期租金'
-            )
-            
-            db.session.add(payment)
-            
-            # 移动到下一个周期
-            current_date = current_date.replace(
-                month=current_date.month + payment_cycle
-            ) if current_date.month + payment_cycle <= 12 else \
-                current_date.replace(
-                    year=current_date.year + (current_date.month + payment_cycle - 1) // 12,
-                    month=(current_date.month + payment_cycle - 1) % 12 + 1
-                )
+        # 计算应缴日期
+        due_date = start_date
+        
+        # 创建支付记录
+        payment = Payment(
+            payment_no=Payment.generate_payment_no(),
+            contract_id=contract.id,
+            payment_type='rent',
+            amount=amount,
+            paid_amount=0,
+            period_start=period_start,
+            period_end=period_end,
+            due_date=due_date,
+            status='pending',
+            late_fee_rate=0.0005,  # 日利率 0.05%
+            remark='租金'
+        )
+        
+        db.session.add(payment)
         
         # 创建押金支付记录
-        if contract.deposit > 0:
+        if contract.deposit_amount > 0:
             deposit_payment = Payment(
                 payment_no=Payment.generate_payment_no(),
                 contract_id=contract.id,
                 payment_type='deposit',
-                amount=contract.deposit,
+                amount=contract.deposit_amount,
                 paid_amount=0,
                 due_date=start_date,
                 status='pending',

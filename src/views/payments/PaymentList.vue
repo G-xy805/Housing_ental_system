@@ -2,10 +2,16 @@
   <div class="payment-list-page">
     <div class="page-header">
       <h2>租金管理</h2>
-      <el-button type="primary" @click="handleBatchRemind" v-if="overdueList.length > 0">
-        <el-icon><Bell /></el-icon>
-        批量催缴 ({{ overdueList.length }})
-      </el-button>
+      <div class="header-buttons">
+        <el-button type="primary" @click="handleAddPayment">
+          <el-icon><Plus /></el-icon>
+          新增租金
+        </el-button>
+        <el-button type="primary" @click="handleBatchRemind" v-if="overdueList.length > 0">
+          <el-icon><Bell /></el-icon>
+          批量催缴 ({{ overdueList.length }})
+        </el-button>
+      </div>
     </div>
 
     <!-- 逾期支付提醒 -->
@@ -113,7 +119,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="due_date" label="应缴日期" width="100" sortable />
-        <el-table-column label="操作" min-width="280" fixed="right">
+        <el-table-column label="操作" min-width="350" fixed="right">
           <template #default="scope">
             <el-button
               link
@@ -136,6 +142,15 @@
             <el-button link type="primary" @click="handleView(scope.row)">
               <el-icon><View /></el-icon>
               详情
+            </el-button>
+            <el-button
+              link
+              type="danger"
+              @click="handleDeletePayment(scope.row)"
+              v-if="scope.row.status !== 'paid'"
+            >
+              <el-icon><Delete /></el-icon>
+              删除
             </el-button>
           </template>
         </el-table-column>
@@ -350,6 +365,102 @@
       </template>
     </el-dialog>
 
+    <!-- 新增租金对话框 -->
+    <el-dialog
+      v-model="addDialogVisible"
+      title="新增租金"
+      width="600px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-form
+        ref="addFormRef"
+        :model="addForm"
+        :rules="addFormRules"
+        label-width="100px"
+        label-position="right"
+      >
+        <el-form-item label="合同选择" prop="contract_id">
+          <el-select v-model="addForm.contract_id" placeholder="请选择合同" style="width: 100%">
+            <el-option
+              v-for="contract in contractList"
+              :key="contract.id"
+              :label="`${contract.contract_no} - ${contract.tenant_name}`"
+              :value="contract.id"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="支付类型" prop="payment_type">
+          <el-select v-model="addForm.payment_type" placeholder="请选择支付类型" style="width: 100%">
+            <el-option label="租金" value="rent" />
+            <el-option label="押金" value="deposit" />
+            <el-option label="水电费" value="utility" />
+            <el-option label="其他" value="other" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="金额" prop="amount">
+          <el-input-number
+            v-model="addForm.amount"
+            :min="0.01"
+            :precision="2"
+            :step="100"
+            style="width: 100%"
+          />
+          <span style="margin-left: 10px">元</span>
+        </el-form-item>
+
+        <el-form-item label="应缴日期" prop="due_date">
+          <el-date-picker
+            v-model="addForm.due_date"
+            type="date"
+            placeholder="选择日期"
+            style="width: 100%"
+            value-format="YYYY-MM-DD"
+          />
+        </el-form-item>
+
+        <el-form-item label="支付周期开始" prop="period_start">
+          <el-date-picker
+            v-model="addForm.period_start"
+            type="date"
+            placeholder="选择日期"
+            style="width: 100%"
+            value-format="YYYY-MM-DD"
+          />
+        </el-form-item>
+
+        <el-form-item label="支付周期结束" prop="period_end">
+          <el-date-picker
+            v-model="addForm.period_end"
+            type="date"
+            placeholder="选择日期"
+            style="width: 100%"
+            value-format="YYYY-MM-DD"
+          />
+        </el-form-item>
+
+        <el-form-item label="备注" prop="remark">
+          <el-input
+            v-model="addForm.remark"
+            type="textarea"
+            :rows="3"
+            placeholder="请输入备注信息（可选）"
+          />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="addDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleAddSubmit" :loading="addSubmitLoading">
+            确认添加
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
     <!-- 支付详情对话框 -->
     <el-dialog
       v-model="detailVisible"
@@ -452,16 +563,20 @@ import {
   Bell,
   Wallet,
   Coin,
-  View
+  View,
+  Delete
 } from '@element-plus/icons-vue'
 import {
   getPaymentList,
   getPaymentDetail,
   createPayment,
+  updatePayment,
+  deletePayment,
   verifyPayment,
   getOverduePayments,
   updateLateFees
 } from '@/api/payment'
+import { getContractList } from '@/api/contract'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
@@ -469,13 +584,86 @@ const paymentList = ref([])
 const payDialogVisible = ref(false)
 const refundDialogVisible = ref(false)
 const detailVisible = ref(false)
+const addDialogVisible = ref(false)
 const paySubmitLoading = ref(false)
 const refundSubmitLoading = ref(false)
+const addSubmitLoading = ref(false)
 const payFormRef = ref(null)
 const refundFormRef = ref(null)
+const addFormRef = ref(null)
 const voucherUploadRef = ref(null)
 const currentPayment = ref({})
 const overdueList = ref([])
+const contractList = ref([])
+
+// 新增租金表单
+const addForm = reactive({
+  contract_id: '',
+  payment_type: 'rent',
+  amount: 0,
+  due_date: '',
+  period_start: '',
+  period_end: '',
+  remark: ''
+})
+
+// 新增租金表单验证规则
+const addFormRules = {
+  contract_id: [
+    { required: true, message: '请选择合同', trigger: 'change' }
+  ],
+  payment_type: [
+    { required: true, message: '请选择支付类型', trigger: 'change' }
+  ],
+  amount: [
+    { required: true, message: '请输入金额', trigger: 'blur' },
+    {
+      type: 'number',
+      min: 0.01,
+      message: '金额必须大于 0',
+      trigger: 'blur'
+    }
+  ],
+  due_date: [
+    { required: true, message: '请选择应缴日期', trigger: 'change' }
+  ],
+  period_start: [
+    {
+      validator: (rule, value, callback) => {
+        if (value && !addForm.period_end) {
+          callback()
+        } else if (value && addForm.period_end) {
+          if (new Date(value) > new Date(addForm.period_end)) {
+            callback(new Error('周期开始日期不能晚于结束日期'))
+          } else {
+            callback()
+          }
+        } else {
+          callback()
+        }
+      },
+      trigger: 'change'
+    }
+  ],
+  period_end: [
+    {
+      validator: (rule, value, callback) => {
+        if (value && !addForm.period_start) {
+          callback()
+        } else if (value && addForm.period_start) {
+          if (new Date(value) < new Date(addForm.period_start)) {
+            callback(new Error('周期结束日期不能早于开始日期'))
+          } else {
+            callback()
+          }
+        } else {
+          callback()
+        }
+      },
+      trigger: 'change'
+    }
+  ]
+}
 
 // 搜索表单
 const searchForm = reactive({
@@ -616,6 +804,86 @@ const loadOverduePayments = async () => {
   } catch (error) {
     console.error('加载逾期记录失败:', error)
   }
+}
+
+// 加载合同列表
+const loadContractList = async () => {
+  try {
+    const res = await getContractList({ status: 'active' })
+    contractList.value = res.data?.items || []
+  } catch (error) {
+    console.error('加载合同列表失败:', error)
+  }
+}
+
+// 新增租金
+const handleAddPayment = () => {
+  loadContractList()
+  resetAddForm()
+  addDialogVisible.value = true
+}
+
+// 重置新增表单
+const resetAddForm = () => {
+  if (addFormRef.value) {
+    addFormRef.value.resetFields()
+  }
+  Object.assign(addForm, {
+    contract_id: '',
+    payment_type: 'rent',
+    amount: 0,
+    due_date: '',
+    period_start: '',
+    period_end: '',
+    remark: ''
+  })
+}
+
+// 提交新增租金
+const handleAddSubmit = async () => {
+  if (!addFormRef.value) return
+  
+  try {
+    await addFormRef.value.validate()
+  } catch (error) {
+    return
+  }
+  
+  addSubmitLoading.value = true
+  try {
+    await createPayment(addForm)
+    ElMessage.success('新增租金成功')
+    
+    addDialogVisible.value = false
+    loadPaymentList()
+  } catch (error) {
+    console.error('新增租金失败:', error)
+    ElMessage.error('新增租金失败：' + (error.message || '请稍后重试'))
+  } finally {
+    addSubmitLoading.value = false
+  }
+}
+
+// 删除租金
+const handleDeletePayment = (row) => {
+  ElMessageBox.confirm(
+    `确定要删除支付记录 ${row.payment_no} 吗？`,
+    '删除确认',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'danger'
+    }
+  ).then(async () => {
+    try {
+      await deletePayment(row.id)
+      ElMessage.success('删除成功')
+      loadPaymentList()
+    } catch (error) {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败：' + (error.message || '请稍后重试'))
+    }
+  }).catch(() => {})
 }
 
 // 更新滞纳金
@@ -784,7 +1052,7 @@ const handleRefundSubmit = async () => {
     }
     
     // 这里调用退还押金的 API（需要根据实际后端接口调整）
-    await updatePayment(currentPayment.value.id, {
+    await updatePaymentHelper(currentPayment.value.id, {
       ...data,
       status: 'refunded'
     })
@@ -844,7 +1112,7 @@ const handleSortChange = ({ prop, order }) => {
 }
 
 // 更新支付（辅助函数）
-const updatePayment = async (id, data) => {
+const updatePaymentHelper = async (id, data) => {
   const { updatePayment: updatePaymentApi } = await import('@/api/payment')
   return updatePaymentApi(id, data)
 }
@@ -871,6 +1139,11 @@ onMounted(() => {
       margin: 0;
       color: #333;
       font-size: 24px;
+    }
+
+    .header-buttons {
+      display: flex;
+      gap: 10px;
     }
   }
 

@@ -39,7 +39,7 @@ class Media(BaseModel):
     is_cover = db.Column(db.Boolean, default=False, comment='是否为封面图片')
     
     # 外键
-    house_id = db.Column(db.Integer, db.ForeignKey('houses.id'), nullable=False, comment='房源 ID')
+    house_id = db.Column(db.Integer, db.ForeignKey('houses.id'), nullable=True, comment='房源 ID')
     
     # 上传人
     uploaded_by = db.Column(db.Integer, db.ForeignKey('users.id'), comment='上传人 ID')

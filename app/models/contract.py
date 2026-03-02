@@ -44,7 +44,6 @@ class Contract(BaseModel):
     # 外键
     house_id = db.Column(db.Integer, db.ForeignKey('houses.id'), nullable=False, comment='房源 ID')
     room_id = db.Column(db.Integer, db.ForeignKey('rooms.id'), comment='房间 ID（合租时填写）')
-    landlord_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, comment='房东 ID')
     tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False, comment='租客 ID')
     
     # 索引
@@ -58,7 +57,7 @@ class Contract(BaseModel):
     
     # 关系 - 使用 back_populates 避免与 Tenant 模型冲突
     tenant_rel = db.relationship('Tenant', back_populates='contracts', lazy='joined')
-    payments = db.relationship('Payment', backref='contract', lazy='dynamic', cascade='all, delete-orphan')
+    payments = db.relationship('Payment', back_populates='contract_rel', lazy='dynamic')
     
     @classmethod
     def generate_contract_no(cls):
@@ -101,14 +100,16 @@ class Contract(BaseModel):
         if self.house:
             data['house_title'] = self.house.title
             data['house_address'] = self.house.address
+            # 从房源获取房东信息
+            if self.house.owner:
+                data['landlord_name'] = self.house.owner.username
+                data['landlord_id'] = self.house.owner_id
         if self.room:
             data['room_number'] = self.room.room_number
             data['room_name'] = self.room.name
         if self.tenant_rel:
             data['tenant_name'] = self.tenant_rel.name
             data['tenant_phone'] = self.tenant_rel.phone
-        if self.landlord:
-            data['landlord_name'] = self.landlord.username
         data['is_expired'] = self.is_expired()
         data['is_expiring_soon'] = self.is_expiring_soon()
         data['days_until_expiry'] = self.get_days_until_expiry()

@@ -12,6 +12,8 @@ class User(BaseModel):
     """
     用户模型
     
+    【重要说明】User 表仅用于公司内部员工（管理员和普通员工），房东不访问系统
+    
     支持管理员和普通员工角色
     管理员拥有所有权限，普通员工仅有基础操作权限
     """
@@ -20,21 +22,21 @@ class User(BaseModel):
     
     # 基本信息
     username = db.Column(db.String(50), unique=True, nullable=False, comment='用户名')
-    email = db.Column(db.String(100), unique=True, nullable=False, comment='邮箱')
+    email = db.Column(db.String(100), unique=True, nullable=True, comment='邮箱')
     password_hash = db.Column(db.String(255), nullable=False, comment='密码哈希')
     
     # 角色：admin-管理员，staff-普通员工
     # 规格说明要求：管理员拥有所有权限，普通员工仅有查看、录入权限（无删除权限）
     role = db.Column(db.String(20), default='staff', comment='用户角色')
     
-    # 用户类型：admin-管理员，landlord-房东，tenant-租客（保留兼容性）
-    user_type = db.Column(db.String(20), default='tenant', comment='用户类型')
+    # 用户类型：admin-管理员，staff-员工（仅内部员工使用）
+    user_type = db.Column(db.String(20), default='staff', comment='用户类型')
     
     # 员工扩展信息
     name = db.Column(db.String(50), comment='姓名')
     phone = db.Column(db.String(20), unique=True, comment='手机号')
     id_card = db.Column(db.String(18), comment='身份证号')
-    id_card_hash = db.Column(db.String(64), comment='身份证号哈希（用于去重验证）')
+    id_card_hash = db.Column(db.String(64), default=None, comment='身份证号哈希（用于去重验证）')
     position = db.Column(db.String(50), comment='职位')
     
     # 员工状态：active-在职，resigned-离职，disabled-禁用
@@ -61,9 +63,9 @@ class User(BaseModel):
         db.Index('idx_users_id_card_hash', 'id_card_hash'),
     )
     
-    # 关系
-    houses = db.relationship('House', backref='owner', lazy='dynamic', foreign_keys='House.owner_id')
-    contracts_as_landlord = db.relationship('Contract', backref='landlord', lazy='dynamic', foreign_keys='Contract.landlord_id')
+    # 关系：员工负责的房源（录入人/负责人）
+    # 使用 back_populates 与 House.owner 建立双向关系
+    houses = db.relationship('House', back_populates='owner', lazy='dynamic', foreign_keys='House.owner_id')
     uploaded_media = db.relationship('Media', lazy='dynamic', foreign_keys='Media.uploaded_by')
     operated_payments = db.relationship('Payment', lazy='dynamic', foreign_keys='Payment.operator_id')
     
@@ -180,7 +182,7 @@ def create_default_admin():
     创建默认管理员用户
     """
     from app import db
-    admin_user = User.query.filter_by(username='admin').first()
+    admin_user = db.session.query(User).filter_by(username='admin').first()
     if not admin_user:
         admin_user = User(
             username='admin',
@@ -193,7 +195,7 @@ def create_default_admin():
         db.session.add(admin_user)
         db.session.commit()
         print('默认管理员用户创建成功！')
-        print('用户名: admin')
-        print('密码: admin123')
+        print('用户名：admin')
+        print('密码：admin123')
     else:
         print('管理员用户已存在，跳过创建')

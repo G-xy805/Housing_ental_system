@@ -32,9 +32,15 @@ class BaseModel(db.Model):
         return self
     
     def delete(self):
-        """从数据库删除对象"""
-        db.session.delete(self)
+        """软删除对象"""
+        self.is_active = False
+        db.session.add(self)
         db.session.commit()
+    
+    @classmethod
+    def active_query(cls):
+        """查询时自动过滤已删除的记录"""
+        return db.session.query(cls).filter(cls.is_active == True)
     
     def __repr__(self):
         return f'<{self.__class__.__name__} {self.id}>'

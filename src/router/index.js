@@ -64,12 +64,6 @@ const routes = [
         meta: { title: '租金管理', icon: 'payments' }
       },
       {
-        path: 'users',
-        name: 'Users',
-        component: () => import('@/views/users/UserList.vue'),
-        meta: { title: '用户管理', icon: 'users', roles: ['admin'] }
-      },
-      {
         path: 'employees',
         name: 'Employees',
         component: () => import('@/views/employees/EmployeeList.vue'),
@@ -80,6 +74,18 @@ const routes = [
         name: 'Tenants',
         component: () => import('@/views/tenants/TenantList.vue'),
         meta: { title: '租客管理', icon: 'tenants' }
+      },
+      {
+        path: 'landlords',
+        name: 'Landlords',
+        component: () => import('@/views/landlords/LandlordList.vue'),
+        meta: { title: '房东管理', icon: 'landlords' }
+      },
+      {
+        path: 'landlord-contracts',
+        name: 'LandlordContracts',
+        component: () => import('@/views/landlord-contracts/ContractList.vue'),
+        meta: { title: '房东合同管理', icon: 'contracts' }
       },
       {
         path: 'backup',

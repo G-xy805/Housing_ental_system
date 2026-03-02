@@ -36,11 +36,9 @@
           />
         </el-form-item>
         <el-form-item label="房源类型">
-          <el-select v-model="searchForm.type" placeholder="请选择" clearable style="width: 120px">
+          <el-select v-model="searchForm.rental_type" placeholder="请选择" clearable style="width: 120px">
             <el-option label="整租" value="whole" />
             <el-option label="合租" value="shared" />
-            <el-option label="公寓" value="apartment" />
-            <el-option label="别墅" value="villa" />
           </el-select>
         </el-form-item>
         <el-form-item label="状态">
@@ -97,7 +95,7 @@
               <el-tag :type="getStatusType(house.status)" size="small">
                 {{ getStatusText(house.status) }}
               </el-tag>
-              <el-tag type="warning" size="small" v-if="house.type === 'shared'">合租</el-tag>
+              <el-tag type="warning" size="small" v-if="house.rental_type === 'shared'">合租</el-tag>
             </div>
           </template>
 
@@ -201,6 +199,7 @@
         :submit-loading="formSubmitLoading"
         @submit="handleFormSubmit"
         @cancel="dialogVisible = false"
+        @submit-success="handleSubmitSuccess"
       />
     </el-dialog>
   </div>
@@ -237,7 +236,7 @@ const searchForm = reactive({
   keyword: '',
   city: '',
   district: '',
-  type: '',
+  rental_type: '',
   status: '',
   min_price: null,
   max_price: null
@@ -271,7 +270,8 @@ const getStatusText = (status) => {
   const texts = {
     available: '可租',
     rented: '已租',
-    maintenance: '维修中'
+    maintenance: '维修中',
+    partially_rented: '部分已租'
   }
   return texts[status] || status
 }
@@ -322,7 +322,7 @@ const handleReset = () => {
     keyword: '',
     city: '',
     district: '',
-    type: '',
+    rental_type: '',
     status: '',
     min_price: null,
     max_price: null
@@ -364,27 +364,47 @@ const handleDelete = (house) => {
       loadHouseList()
     } catch (error) {
       console.error('删除失败:', error)
+      // 显示后端返回的错误消息
+      const errorMessage = error.response?.data?.error?.message || error.message || '删除失败，请重试'
+      ElMessage.error(errorMessage)
     }
   }).catch(() => {})
+}
+
+// 提交成功回调
+let submitSuccessCallback = null
+
+const handleSubmitSuccess = (callback) => {
+  submitSuccessCallback = callback
 }
 
 // 表单提交
 const handleFormSubmit = async (data) => {
   formSubmitLoading.value = true
   try {
+    let result
     if (isEdit.value) {
       // 编辑
-      await houseStore.editHouse(currentHouseData.value.id, data)
+      result = await houseStore.editHouse(currentHouseData.value.id, data)
       ElMessage.success('编辑成功')
     } else {
       // 新增
-      await houseStore.addHouse(data)
+      result = await houseStore.addHouse(data)
       ElMessage.success('创建成功')
     }
+    
+    // 调用成功回调，返回房源数据
+    if (submitSuccessCallback) {
+      submitSuccessCallback(result)
+      submitSuccessCallback = null
+    }
+    
     dialogVisible.value = false
     loadHouseList()
   } catch (error) {
     console.error('提交失败:', error)
+    // 抛出错误，让子组件知道提交失败
+    throw error
   } finally {
     formSubmitLoading.value = false
   }

@@ -15,6 +15,61 @@
       </div>
     </div>
 
+    <el-row :gutter="20" class="statistics-row">
+      <el-col :span="6">
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <div class="stat-icon total">
+              <el-icon :size="32"><UserFilled /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ statistics.total || 0 }}</div>
+              <div class="stat-label">总员工数</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <div class="stat-icon active">
+              <el-icon :size="32"><CircleCheck /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ statistics.active || 0 }}</div>
+              <div class="stat-label">在职员工</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <div class="stat-icon disabled">
+              <el-icon :size="32"><CircleClose /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ statistics.disabled || 0 }}</div>
+              <div class="stat-label">禁用员工</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <div class="stat-icon new">
+              <el-icon :size="32"><TrendCharts /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ statistics.resigned || 0 }}</div>
+              <div class="stat-label">离职员工</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <div class="filter-section">
       <div class="filter-content">
         <div class="filter-items">
@@ -60,12 +115,27 @@
 
     <div class="table-section">
       <div class="table-container">
+        <div v-if="selectedEmployees.length > 0" class="batch-actions">
+          <span class="selected-info">已选择 {{ selectedEmployees.length }} 项</span>
+          <el-button type="success" size="small" @click="handleBatchAction('enable')">
+            批量启用
+          </el-button>
+          <el-button type="warning" size="small" @click="handleBatchAction('disable')">
+            批量禁用
+          </el-button>
+          <el-button type="danger" size="small" @click="handleBatchAction('delete')">
+            批量删除
+          </el-button>
+        </div>
+
         <el-table
           v-loading="loading"
           :data="employeeList"
           class="data-table"
           :header-cell-style="{ background: '#fafafa', fontWeight: '600' }"
+          @selection-change="handleSelectionChange"
         >
+          <el-table-column type="selection" width="55" />
           <el-table-column prop="id" label="ID" min-width="60" align="center" />
           <el-table-column prop="name" label="姓名" min-width="80">
             <template #default="{ row }">
@@ -92,6 +162,11 @@
                 <span class="status-dot"></span>
                 {{ getStatusText(row.status) }}
               </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="last_login" label="最后登录" min-width="150">
+            <template #default="{ row }">
+              {{ formatDate(row.last_login) }}
             </template>
           </el-table-column>
           <el-table-column label="操作" min-width="220" fixed="right" align="center">
@@ -287,7 +362,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, Refresh, Edit, Delete, Key, Switch, View } from '@element-plus/icons-vue'
+import { Plus, Search, Refresh, Edit, Delete, Key, Switch, View, UserFilled, CircleCheck, CircleClose, TrendCharts } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import {
   getEmployeeList,
@@ -295,11 +370,14 @@ import {
   updateEmployee,
   updateEmployeeStatus,
   deleteEmployee,
-  resetEmployeePassword
+  resetEmployeePassword,
+  getEmployeeStats,
+  batchActionEmployees
 } from '@/api/employee'
 
 const loading = ref(false)
 const employeeList = ref([])
+const selectedEmployees = ref([])
 const dialogVisible = ref(false)
 const detailVisible = ref(false)
 const dialogTitle = ref('新增员工')
@@ -307,6 +385,13 @@ const isEdit = ref(false)
 const submitLoading = ref(false)
 const formRef = ref(null)
 const currentEmployee = ref(null)
+
+const statistics = reactive({
+  total: 0,
+  active: 0,
+  disabled: 0,
+  resigned: 0
+})
 
 const filterForm = reactive({
   keyword: '',
@@ -348,12 +433,9 @@ const formRules = {
     { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }
   ],
   email: [
-    { required: true, message: '请输入邮箱', trigger: 'blur' },
     { type: 'email', message: '请输入正确的邮箱地址', trigger: 'blur' }
   ],
-  role: [
-    { required: true, message: '请选择角色', trigger: 'change' }
-  ]
+  role: []
 }
 
 const passwordDialogVisible = ref(false)
@@ -409,6 +491,19 @@ const formatDate = (date) => {
   return date ? dayjs(date).format('YYYY-MM-DD HH:mm') : '-'
 }
 
+const fetchStatistics = async () => {
+  try {
+    const res = await getEmployeeStats()
+    const data = res.data
+    statistics.total = data.total || 0
+    statistics.active = data.by_status?.active || 0
+    statistics.disabled = data.by_status?.disabled || 0
+    statistics.resigned = data.by_status?.resigned || 0
+  } catch (error) {
+    console.error('获取统计信息失败', error)
+  }
+}
+
 const fetchEmployeeList = async () => {
   loading.value = true
   try {
@@ -447,6 +542,10 @@ const handleSizeChange = (size) => {
 const handlePageChange = (page) => {
   pagination.page = page
   fetchEmployeeList()
+}
+
+const handleSelectionChange = (selection) => {
+  selectedEmployees.value = selection
 }
 
 const resetForm = () => {
@@ -505,6 +604,7 @@ const handleSubmit = async () => {
       }
       dialogVisible.value = false
       fetchEmployeeList()
+      fetchStatistics()
     } catch (error) {
       ElMessage.error(error.message || '操作失败')
     } finally {
@@ -527,6 +627,7 @@ const handleToggleStatus = async (row) => {
     await updateEmployeeStatus(row.id, newStatus)
     ElMessage.success(`${actionText}成功`)
     fetchEmployeeList()
+    fetchStatistics()
   } catch (error) {
     if (error !== 'cancel') {
       ElMessage.error(error.message || `${actionText}失败`)
@@ -555,7 +656,7 @@ const confirmResetPassword = async () => {
   try {
     await resetEmployeePassword(currentEmployee.value.id, passwordForm.newPassword)
     ElMessage.success('密码重置成功')
-    passwordDialogVisible = false
+    passwordDialogVisible.value = false
   } catch (error) {
     ElMessage.error(error.message || '密码重置失败')
   } finally {
@@ -574,6 +675,7 @@ const handleDelete = async (row) => {
     await deleteEmployee(row.id)
     ElMessage.success('删除成功')
     fetchEmployeeList()
+    fetchStatistics()
   } catch (error) {
     if (error !== 'cancel') {
       ElMessage.error(error.message || '删除失败')
@@ -581,8 +683,36 @@ const handleDelete = async (row) => {
   }
 }
 
+const handleBatchAction = async (action) => {
+  const actionTexts = {
+    enable: '启用',
+    disable: '禁用',
+    delete: '删除'
+  }
+  
+  try {
+    await ElMessageBox.confirm(`确定要批量${actionTexts[action]}选中的员工吗？`, '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    
+    const userIds = selectedEmployees.value.map(employee => employee.id)
+    await batchActionEmployees({ user_ids: userIds, action })
+    ElMessage.success(`批量${actionTexts[action]}成功`)
+    selectedEmployees.value = []
+    fetchEmployeeList()
+    fetchStatistics()
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.message || `批量${actionTexts[action]}失败`)
+    }
+  }
+}
+
 onMounted(() => {
   fetchEmployeeList()
+  fetchStatistics()
 })
 </script>
 
@@ -634,6 +764,58 @@ onMounted(() => {
     
     .btn-icon {
       margin-right: 6px;
+    }
+  }
+}
+
+.statistics-row {
+  margin-bottom: 20px;
+  
+  .stat-card {
+    .stat-content {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      
+      .stat-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        
+        &.total {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        &.active {
+          background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        }
+        
+        &.disabled {
+          background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+        }
+        
+        &.new {
+          background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+      }
+      
+      .stat-info {
+        .stat-value {
+          font-size: 28px;
+          font-weight: 600;
+          color: #303133;
+        }
+        
+        .stat-label {
+          font-size: 14px;
+          color: #909399;
+          margin-top: 4px;
+        }
+      }
     }
   }
 }
@@ -705,6 +887,21 @@ onMounted(() => {
   border-radius: 16px;
   padding: 24px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  
+  .batch-actions {
+    margin-bottom: 16px;
+    padding: 10px 16px;
+    background-color: #f4f4f5;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    
+    .selected-info {
+      color: #606266;
+      font-size: 14px;
+    }
+  }
   
   .data-table {
     width: 100%;
@@ -1000,6 +1197,12 @@ onMounted(() => {
     }
   }
   
+  .statistics-row {
+    .stat-card {
+      margin-bottom: 16px;
+    }
+  }
+  
   .filter-section {
     .filter-content {
       flex-direction: column;
@@ -1030,6 +1233,16 @@ onMounted(() => {
   .table-section {
     padding: 16px;
     overflow-x: auto;
+    
+    .batch-actions {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      
+      .el-button {
+        width: 100%;
+      }
+    }
   }
 }
 </style>

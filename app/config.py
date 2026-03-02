@@ -46,6 +46,15 @@ class Config:
     # 日志配置
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
     LOG_FILE = os.path.join(BASE_DIR, 'logs', 'app.log')
+    
+    # 加密配置
+    ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', 'generate-new-key-for-production')
+    
+    # HTTPS 安全配置
+    SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', 'False').lower() == 'true'
+    REMEMBER_COOKIE_SECURE = os.getenv('REMEMBER_COOKIE_SECURE', 'False').lower() == 'true'
+    SESSION_COOKIE_HTTPONLY = os.getenv('SESSION_COOKIE_HTTPONLY', 'True').lower() == 'true'
+    PERMANENT_SESSION_LIFETIME = int(os.getenv('PERMANENT_SESSION_LIFETIME', 3600))
 
 
 class DevelopmentConfig(Config):

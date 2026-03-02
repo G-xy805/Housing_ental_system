@@ -14,12 +14,9 @@
         <el-input v-model="formData.title" placeholder="请输入房源标题" maxlength="100" show-word-limit />
       </el-form-item>
 
-      <el-form-item label="房源类型" prop="type">
-        <el-select v-model="formData.type" placeholder="请选择房源类型" style="width: 100%">
+      <el-form-item label="租赁类型" prop="rental_type">
+        <el-select v-model="formData.rental_type" placeholder="请选择租赁类型" style="width: 100%" disabled>
           <el-option label="整租" value="whole" />
-          <el-option label="合租" value="shared" />
-          <el-option label="公寓" value="apartment" />
-          <el-option label="别墅" value="villa" />
         </el-select>
       </el-form-item>
 
@@ -28,6 +25,7 @@
           <el-option label="可租" value="available" />
           <el-option label="已租" value="rented" />
           <el-option label="维修中" value="maintenance" />
+          <el-option label="部分已租" value="partially_rented" />
         </el-select>
       </el-form-item>
 
@@ -50,6 +48,32 @@
         />
       </el-form-item>
 
+      <!-- 房东信息 -->
+      <el-divider content-position="left">房东信息</el-divider>
+
+      <el-form-item label="选择房东" prop="landlord_id">
+        <el-select v-model="selectedLandlordId" placeholder="请选择房东" filterable :loading="landlordLoading" @change="handleLandlordChange">
+          <el-option
+            v-for="landlord in landlordList"
+            :key="landlord.id"
+            :label="`${landlord.name} (${landlord.phone})`"
+            :value="landlord.id"
+          />
+        </el-select>
+      </el-form-item>
+
+      <el-form-item label="房东姓名" prop="contact_name" v-if="formData.contact_name">
+        <el-input v-model="formData.contact_name" placeholder="请输入房东姓名" maxlength="50" show-word-limit disabled />
+      </el-form-item>
+
+      <el-form-item label="房东电话" prop="contact_phone" v-if="formData.contact_phone">
+        <el-input v-model="formData.contact_phone" placeholder="请输入 11 位手机号码" maxlength="11" show-word-limit disabled />
+      </el-form-item>
+
+      <el-form-item label="房东微信" prop="contact_wechat" v-if="formData.contact_wechat">
+        <el-input v-model="formData.contact_wechat" placeholder="请输入房东微信（可选）" maxlength="50" show-word-limit disabled />
+      </el-form-item>
+
       <!-- 房屋信息 -->
       <el-divider content-position="left">房屋信息</el-divider>
 
@@ -64,8 +88,19 @@
         />
       </el-form-item>
 
-      <el-form-item label="押金方式" prop="deposit_method">
-        <el-select v-model="formData.deposit_method" placeholder="请选择押金方式" style="width: 100%">
+      <el-form-item label="押金 (元)" prop="deposit">
+        <el-input-number
+          v-model="formData.deposit"
+          :min="0"
+          :precision="2"
+          :step="100"
+          placeholder="请输入押金"
+          style="width: 100%"
+        />
+      </el-form-item>
+
+      <el-form-item label="付款方式" prop="payment_method">
+        <el-select v-model="formData.payment_method" placeholder="请选择付款方式" style="width: 100%">
           <el-option label="押一付三" value="press1_pay3" />
           <el-option label="押一付一" value="press1_pay1" />
           <el-option label="押二付三" value="press2_pay3" />
@@ -206,23 +241,6 @@
       <!-- 图片上传 -->
       <el-divider content-position="left">房源图片</el-divider>
 
-      <el-form-item label="封面图片" prop="cover_image">
-        <el-upload
-          class="image-uploader"
-          action="#"
-          :http-request="handleCoverUpload"
-          :show-file-list="false"
-          :before-upload="beforeImageUpload"
-          accept="image/*"
-        >
-          <img v-if="formData.cover_image" :src="formData.cover_image" class="uploaded-image" />
-          <el-icon v-else class="uploader-icon">
-            <Plus />
-          </el-icon>
-        </el-upload>
-        <div class="upload-tip">点击上传封面图片，支持 JPG/PNG 格式，大小不超过 5MB</div>
-      </el-form-item>
-
       <el-form-item label="图片集" prop="images">
         <el-upload
           class="image-list-uploader"
@@ -234,10 +252,12 @@
           list-type="picture-card"
           :on-preview="handlePictureCardPreview"
           accept="image/*"
+          multiple
+          :limit="20"
         >
           <el-icon><Plus /></el-icon>
         </el-upload>
-        <div class="upload-tip">可上传多张房源图片，支持 JPG/PNG 格式，每张不超过 5MB</div>
+        <div class="upload-tip">可上传多张房源图片（最多 20 张），支持 JPG/PNG 格式，每张不超过 5MB</div>
       </el-form-item>
 
       <!-- 提交按钮 -->
@@ -257,10 +277,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { ElMessage, ElLoading } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { uploadHouseImage } from '@/api/house'
+import { uploadHouseImage, uploadImage, deleteMedia, setCoverImage } from '@/api/house'
+import { getLandlordList } from '@/api/landlord'
 
 const props = defineProps({
   modelValue: {
@@ -307,13 +328,14 @@ const amenityOptions = [
 // 表单数据
 const defaultFormData = {
   title: '',
-  type: 'whole',
+  rental_type: 'whole',
   status: 'available',
   city: '',
   district: '',
   address: '',
   rent_price: 0,
-  deposit_method: 'press1_pay3',
+  deposit: 0,
+  payment_method: 'press1_pay3',
   area: 0,
   room_count: 0,
   hall_count: 0,
@@ -325,7 +347,10 @@ const defaultFormData = {
   amenities: [],
   description: '',
   cover_image: '',
-  images: []
+  images: [],
+  contact_name: '',
+  contact_phone: '',
+  contact_wechat: ''
 }
 
 const formData = reactive({ ...defaultFormData })
@@ -336,7 +361,7 @@ const formRules = {
     { required: true, message: '请输入房源标题', trigger: 'blur' },
     { min: 5, max: 100, message: '长度在 5 到 100 个字符', trigger: 'blur' }
   ],
-  type: [{ required: true, message: '请选择房源类型', trigger: 'change' }],
+  rental_type: [{ required: true, message: '请选择房源类型', trigger: 'change' }],
   status: [{ required: true, message: '请选择房源状态', trigger: 'change' }],
   city: [{ required: true, message: '请输入城市', trigger: 'blur' }],
   district: [{ required: true, message: '请输入区域', trigger: 'blur' }],
@@ -345,41 +370,173 @@ const formRules = {
     { min: 5, message: '详细地址至少 5 个字符', trigger: 'blur' }
   ],
   rent_price: [{ required: true, message: '请输入租金', trigger: 'blur' }],
+  deposit: [{ required: true, message: '请输入押金', trigger: 'blur' }],
   area: [{ required: true, message: '请输入建筑面积', trigger: 'blur' }],
   room_count: [{ required: true, message: '请输入房间数', trigger: 'blur' }],
   floor: [{ required: true, message: '请输入楼层', trigger: 'blur' }],
-  total_floors: [{ required: true, message: '请输入总楼层', trigger: 'blur' }]
+  total_floors: [{ required: true, message: '请输入总楼层', trigger: 'blur' }],
+  landlord_id: [
+    { required: true, message: '请选择房东', trigger: 'change' }
+  ],
+  contact_name: [
+    { required: true, message: '请输入房东姓名', trigger: 'blur' },
+    { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
+  ],
+  contact_phone: [
+    { required: true, message: '请输入房东电话', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (!value) {
+          callback(new Error('请输入房东电话'))
+          return
+        }
+        // 验证手机号格式：11 位数字，1 开头，第二位 3-9
+        const phoneRegex = /^1[3-9]\d{9}$/
+        if (!phoneRegex.test(value)) {
+          callback(new Error('请输入正确的 11 位手机号码'))
+          return
+        }
+        callback()
+      },
+      trigger: 'blur'
+    }
+  ],
+  images: [
+    {
+      validator: (rule, value, callback) => {
+        if (!value || value.length === 0) {
+          callback(new Error('请至少上传一张房源图片'))
+          return
+        }
+        callback()
+      },
+      trigger: 'change'
+    }
+  ]
 }
 
 // 图片文件列表
-const imageFileList = computed({
-  get: () => {
-    return (formData.images || []).map((url, index) => ({
-      uid: index,
+const imageFileList = ref([])
+
+// 房东相关状态
+const landlordList = ref([])
+const landlordLoading = ref(false)
+const selectedLandlordId = ref(null)
+
+// 监听 formData.images 变化，同步到 imageFileList
+watch(() => formData.images, (newImages) => {
+  const images = newImages || []
+  imageFileList.value = images.map((img, index) => {
+    // 处理不同的数据格式
+    let imageUrl = ''
+    let mediaId = null
+    
+    if (typeof img === 'string') {
+      imageUrl = img
+    } else if (img && typeof img === 'object') {
+      imageUrl = img.file_url || img.url || ''
+      mediaId = img.id || img.media_id || null
+    }
+    
+    return {
+      uid: img.id || index,
       name: `图片${index + 1}`,
-      status: 'done',
-      url: url
-    }))
-  },
-  set: (val) => {
-    formData.images = val.map(file => file.url)
-  }
-})
+      status: 'success',
+      url: imageUrl,
+      response: mediaId ? { id: mediaId } : null
+    }
+  })
+}, { immediate: true, deep: true })
 
 // 图片预览对话框
 const dialogVisible = ref(false)
 const dialogImageUrl = ref('')
 
+// 获取房东列表
+async function fetchLandlordList() {
+  landlordLoading.value = true
+  try {
+    const res = await getLandlordList({ page_size: 100, status: 'active' })
+    landlordList.value = res.data?.items || []
+  } catch (error) {
+    console.error('获取房东列表失败:', error)
+    ElMessage.error('获取房东列表失败，请重试')
+  } finally {
+    landlordLoading.value = false
+  }
+}
+
+// 组件挂载时获取房东列表
+onMounted(() => {
+  fetchLandlordList()
+})
+
+// 处理房东选择变化
+function handleLandlordChange(landlordId) {
+  const selectedLandlord = landlordList.value.find(landlord => landlord.id === landlordId)
+  if (selectedLandlord) {
+    formData.contact_name = selectedLandlord.name
+    formData.contact_phone = selectedLandlord.phone
+    formData.contact_wechat = selectedLandlord.wechat || ''
+  }
+}
+
 // 初始化表单数据
 const initFormData = () => {
   if (props.modelValue && Object.keys(props.modelValue).length > 0) {
-    Object.assign(formData, defaultFormData, props.modelValue)
-    // 确保 images 是数组
-    if (!formData.images) {
-      formData.images = []
+    // 从 media 字段提取图片信息（包含 ID）
+    let images = []
+    if (Array.isArray(props.modelValue.media)) {
+      images = props.modelValue.media
+        .filter(item => item.file_type === 'image')  // 只保留图片
+        .map(item => ({
+          id: item.id,
+          file_url: item.file_url
+        }))  // 保留 ID 和 URL
+    } else if (Array.isArray(props.modelValue.images)) {
+      images = props.modelValue.images.map(img => 
+        typeof img === 'string' ? { file_url: img } : img
+      )
+    }
+    
+    // 处理配套设施数据
+    let amenities = []
+    if (Array.isArray(props.modelValue.amenities)) {
+      amenities = [...props.modelValue.amenities]
+    } else if (props.modelValue.facilities && typeof props.modelValue.facilities === 'object') {
+      // 从 facilities 对象转换为 amenities 数组
+      amenities = Object.keys(props.modelValue.facilities).filter(key => props.modelValue.facilities[key])
+    }
+    
+    // 创建一个新的对象，确保数组是独立的
+    const modelValueCopy = {
+      ...props.modelValue,
+      images: images,
+      amenities: amenities
+    }
+    Object.assign(formData, defaultFormData, modelValueCopy)
+    
+    // 确保封面图片设置为第一张图片
+    if (formData.images.length > 0) {
+      const firstImage = formData.images[0]
+      formData.cover_image = typeof firstImage === 'string' ? firstImage : (firstImage.file_url || firstImage.url)
+    }
+    
+    // 设置选中的房东
+    if (props.modelValue.landlord_id) {
+      selectedLandlordId.value = props.modelValue.landlord_id
+    } else if (formData.contact_name && formData.contact_phone && landlordList.value.length > 0) {
+      // 如果没有 landlord_id，但有联系信息，尝试匹配房东
+      const matchedLandlord = landlordList.value.find(landlord => 
+        landlord.name === formData.contact_name && landlord.phone === formData.contact_phone
+      )
+      if (matchedLandlord) {
+        selectedLandlordId.value = matchedLandlord.id
+      }
     }
   } else {
     Object.assign(formData, defaultFormData)
+    selectedLandlordId.value = null
   }
 }
 
@@ -401,96 +558,164 @@ const beforeImageUpload = (file) => {
   return isImage && isLt5M
 }
 
-// 处理封面图片上传
-const handleCoverUpload = async (file) => {
-  try {
-    const formDataUpload = new FormData()
-    formDataUpload.append('files', file.file)
-    
-    // 如果有 houseId，使用后端上传接口；否则使用本地预览
-    const houseId = props.modelValue?.id
-    if (houseId) {
-      const res = await uploadHouseImage(formDataUpload, houseId)
-      // 从响应中获取图片 URL
-      if (res.data?.files && res.data.files.length > 0) {
-        formData.cover_image = res.data.files[0].file_url
-      }
-    }
-    
-    // 如果没有返回 url，使用本地预览
-    if (!formData.cover_image) {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        formData.cover_image = e.target.result
-      }
-      reader.readAsDataURL(file.file)
-    }
-  } catch (error) {
-    console.error('上传封面图片失败:', error)
-    // 失败时使用本地预览
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      formData.cover_image = e.target.result
-    }
-    reader.readAsDataURL(file.file)
-  }
+// 封面图片上传方法已移除，现在使用图片集的第一张作为封面
+
+// 处理文件变化（当用户选择文件时）
+const handleFileChange = (file, fileList) => {
+  // 只处理文件状态变化，不添加图片到数组
+  // 图片添加逻辑已在 handleImagesUpload 中处理
+  console.log('文件状态变化:', file.status)
 }
 
-// 处理图片集上传
-const handleImagesUpload = async (file) => {
+// 处理图片集上传（仅在前端预览，不立即上传到服务器）
+const handleImagesUpload = (options) => {
+  const { file, onSuccess, onError } = options
+  
   try {
-    const formDataUpload = new FormData()
-    formDataUpload.append('files', file.file)
+    console.log('开始上传图片:', file.name, '大小:', file.size)
     
-    // 如果有 houseId，使用后端上传接口；否则使用本地预览
-    const houseId = props.modelValue?.id
-    if (houseId) {
-      const res = await uploadHouseImage(formDataUpload, houseId)
-      // 从响应中获取图片 URL
-      if (res.data?.files && res.data.files.length > 0) {
-        formData.images.push(res.data.files[0].file_url)
-      }
-    }
-    
-    // 如果没有返回 url，使用本地预览
-    if (formData.images.length === 0 || !formData.images[formData.images.length - 1]) {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        formData.images.push(e.target.result)
-      }
-      reader.readAsDataURL(file.file)
-    }
-  } catch (error) {
-    console.error('上传图片失败:', error)
-    // 失败时使用本地预览
+    // 使用本地预览，不立即上传到服务器
     const reader = new FileReader()
     reader.onload = (e) => {
-      formData.images.push(e.target.result)
+      const localUrl = e.target.result
+      // 添加到 formData.images，watch 会自动更新 imageFileList
+      formData.images.push(localUrl)
+      console.log('图片已添加到预览:', localUrl)
+      
+      // 如果是第一张图片，自动设为封面
+      if (formData.images.length === 1) {
+        formData.cover_image = localUrl
+        console.log('自动设置第一张图片为封面:', localUrl)
+      }
+      
+      ElMessage.success('图片已添加到预览')
+      onSuccess({ file_url: localUrl })
     }
-    reader.readAsDataURL(file.file)
+    reader.readAsDataURL(file)
+  } catch (error) {
+    console.error('上传图片失败:', error)
+    ElMessage.error('上传失败，请重试')
+    onError(error)
   }
 }
 
 // 处理图片移除
-const handleImageRemove = (file, fileList) => {
-  const index = formData.images.indexOf(file.url)
-  if (index > -1) {
-    formData.images.splice(index, 1)
+const handleImageRemove = async (file, fileList) => {
+  try {
+    // 检查是否是封面图片
+    const isCoverImage = formData.cover_image === file.url
+    
+    // 尝试从服务器删除
+    if (file.response && file.response.id) {
+      // 如果有媒体 ID，调用删除 API
+      await deleteMedia(file.response.id)
+      ElMessage.success('删除成功')
+    }
+    
+    // 从本地数组移除
+    const index = formData.images.findIndex(img => {
+      if (typeof img === 'string') {
+        return img === file.url
+      } else if (img && typeof img === 'object') {
+        return (img.file_url || img.url) === file.url
+      }
+      return false
+    })
+    
+    if (index > -1) {
+      formData.images.splice(index, 1)
+    }
+    
+    // 如果删除后还有图片，确保第一张图片是封面
+    if (formData.images.length > 0) {
+      const firstImage = formData.images[0]
+      const newCoverUrl = typeof firstImage === 'string' ? firstImage : (firstImage.file_url || firstImage.url)
+      
+      if (newCoverUrl) {
+        formData.cover_image = newCoverUrl
+        
+        // 如果是编辑模式，调用 API 将第一张图片设为封面
+        const houseId = props.modelValue?.id
+        if (houseId) {
+          // 找到第一张图片的媒体 ID
+          const firstImageItem = formData.images[0]
+          const mediaId = typeof firstImageItem === 'object' ? (firstImageItem.id || null) : null
+          
+          if (mediaId) {
+            try {
+              // 调用设置封面的 API
+              await setCoverImage(mediaId, true)
+              ElMessage.success('已自动设置新封面')
+            } catch (coverError) {
+              console.error('设置封面失败:', coverError)
+              // 即使设置封面失败，也更新前端显示
+            }
+          }
+        }
+      }
+    } else {
+      // 如果没有图片了，清空封面
+      formData.cover_image = ''
+    }
+  } catch (error) {
+    console.error('删除失败:', error)
+    ElMessage.error('删除失败，请重试')
+    
+    // 即使删除失败，也从本地移除（允许用户重试）
+    const index = formData.images.findIndex(img => 
+      (typeof img === 'string' ? img : (img.file_url || img.url)) === file.url
+    )
+    if (index > -1) {
+      formData.images.splice(index, 1)
+    }
+    
+    // 确保删除后封面正确
+    if (formData.images.length > 0) {
+      const firstImage = formData.images[0]
+      const newCoverUrl = typeof firstImage === 'string' ? firstImage : (firstImage.file_url || firstImage.url)
+      if (newCoverUrl) {
+        formData.cover_image = newCoverUrl
+      }
+    } else {
+      formData.cover_image = ''
+    }
   }
 }
 
 // 图片预览
 const handlePictureCardPreview = (file) => {
-  dialogImageUrl.value = file.url
-  dialogVisible.value = true
+  try {
+    // 处理不同的数据格式
+    if (file && typeof file === 'object') {
+      dialogImageUrl.value = file.file_url || file.url || ''
+    } else if (typeof file === 'string') {
+      dialogImageUrl.value = file
+    } else {
+      dialogImageUrl.value = file.url || ''
+    }
+    
+    // 验证 URL 是否有效
+    if (!dialogImageUrl.value) {
+      ElMessage.warning('图片地址无效')
+      return
+    }
+    
+    dialogVisible.value = true
+  } catch (error) {
+    console.error('图片预览失败:', error)
+    ElMessage.error('图片预览失败，请重试')
+  }
 }
 
 // 提交表单
 const handleSubmit = async () => {
   try {
+    // 将 selectedLandlordId 赋值给 formData.landlord_id 用于表单验证
+    formData.landlord_id = selectedLandlordId.value
     await formRef.value.validate()
-    // 转换字段名以匹配后端 API
-    const submitData = {
+    
+    // 先提交房源基本数据（不含图片）
+    const basicData = {
       title: formData.title,
       description: formData.description,
       city: formData.city,
@@ -503,23 +728,136 @@ const handleSubmit = async () => {
       floor: formData.floor,
       total_floors: formData.total_floors,
       rent_price: formData.rent_price,
-      payment_method: formData.deposit_method,
-      rental_type: formData.type,
+      deposit: formData.deposit,
+      payment_method: formData.payment_method,
+      rental_type: formData.rental_type,
       status: formData.status,
-      orientation: formData.orientation,
-      decoration: formData.decoration,
       facilities: Array.isArray(formData.amenities) 
         ? formData.amenities.reduce((acc, item) => {
             acc[item] = true
             return acc
           }, {})
         : {},
-      cover_image: formData.cover_image || ''
+      landlord_id: selectedLandlordId.value,
+      contact_name: formData.contact_name,
+      contact_phone: formData.contact_phone,
+      contact_wechat: formData.contact_wechat
     }
-    console.log('提交数据:', submitData)
-    emit('submit', submitData)
+    
+    console.log('提交基本数据:', basicData)
+    
+    // 触发提交事件，等待父组件创建/更新房源
+    const houseData = await new Promise((resolve, reject) => {
+      const onSubmitSuccess = (data) => {
+        resolve(data)
+      }
+      
+      // 临时绑定成功事件
+      const successEventName = 'submit-success'
+      emit(successEventName, onSubmitSuccess)
+      
+      // 提交基本数据
+      try {
+        emit('submit', basicData)
+        // 如果父组件没有立即抛出错误，设置一个定时器检查是否有响应
+        const timeoutId = setTimeout(() => {
+          reject(new Error('提交超时，请重试'))
+        }, 30000) // 30秒超时
+        
+        // 保存定时器ID，以便在成功时清除
+        window._submitTimeoutId = timeoutId
+      } catch (error) {
+        reject(error)
+      }
+    })
+    
+    // 清除超时定时器
+    if (window._submitTimeoutId) {
+      clearTimeout(window._submitTimeoutId)
+      window._submitTimeoutId = null
+    }
+    
+    console.log('房源创建/更新成功:', houseData)
+    const houseId = houseData.id
+    
+    // 检查是否有图片需要上传
+    const needUpload = formData.images && formData.images.length > 0 && formData.images.some(img => {
+      const imgUrl = typeof img === 'string' ? img : (img.file_url || img.url)
+      return imgUrl && imgUrl.startsWith('data:')
+    })
+    
+    if (needUpload) {
+      const loading = ElLoading.service({
+        lock: true,
+        text: '正在上传图片...',
+        background: 'rgba(0, 0, 0, 0.7)'
+      })
+      
+      try {
+        // 收集所有需要上传的图片
+        const imagesToUpload = []
+        
+        // 处理图片集
+        if (formData.images) {
+          formData.images.forEach((img, index) => {
+            const imgUrl = typeof img === 'string' ? img : (img.file_url || img.url)
+            if (imgUrl && imgUrl.startsWith('data:')) {
+              // 第一张图片设为封面
+              imagesToUpload.push({ type: index === 0 ? 'cover' : 'image', url: imgUrl })
+            }
+          })
+        }
+        
+        if (imagesToUpload.length > 0) {
+          console.log('需要上传的图片数量:', imagesToUpload.length)
+          
+          // 转换 base64 为 File 对象并上传
+          const uploadPromises = imagesToUpload.map(async (item, index) => {
+            const blob = await fetch(item.url).then(res => res.blob())
+            const file = new File([blob], `image_${index}.jpg`, { type: 'image/jpeg' })
+            
+            const formDataUpload = new FormData()
+            formDataUpload.append('files', file)
+            
+            // 使用房源上传接口，直接关联到房源
+            const res = await uploadHouseImage(formDataUpload, houseId, item.type === 'cover')
+            if (res.data?.files && res.data.files.length > 0) {
+              return res.data.files[0].file_url
+            }
+            return null
+          })
+          
+          const uploadedUrls = await Promise.all(uploadPromises)
+          console.log('上传结果:', uploadedUrls)
+          
+          // 上传完成后刷新房源数据
+          ElMessage.success('图片上传成功')
+        }
+        
+        loading.close()
+      } catch (uploadError) {
+        loading.close()
+        console.error('上传图片失败:', uploadError)
+        ElMessage.error('上传图片失败，请重试')
+        return false
+      }
+    }
+    
+    // 通知父组件刷新数据
+    emit('refresh')
   } catch (error) {
-    console.error('表单验证失败:', error)
+    console.error('提交失败:', error)
+    // 清除超时定时器
+    if (window._submitTimeoutId) {
+      clearTimeout(window._submitTimeoutId)
+      window._submitTimeoutId = null
+    }
+    // 如果是表单验证失败，显示验证错误
+    if (error.name === 'ValidationError') {
+      return false
+    }
+    // 其他错误（如房源提交失败），显示错误信息
+    ElMessage.error(error.message || '提交失败，请重试')
     return false
   }
 }

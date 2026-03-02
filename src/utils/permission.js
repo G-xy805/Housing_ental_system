@@ -7,16 +7,23 @@ import { useUserStore } from '@/store/user'
 
 /**
  * 检查用户是否有指定权限
- * @param {string|string[]} role 角色或角色数组
+ * @param {string} permission 权限类型 ('view', 'create', 'edit', 'delete')
  * @returns {boolean} 是否有权限
  */
-export function hasPermission(role) {
+export function hasPermission(permission) {
   const userStore = useUserStore()
   const userType = userStore.userType
   
-  // 支持字符串或数组
-  const roles = Array.isArray(role) ? role : [role]
-  return roles.includes(userType)
+  // 管理员拥有所有权限
+  if (userType === 'admin') {
+    return true
+  }
+  // 普通员工有查看、创建、编辑权限，无删除权限
+  else if (userType === 'staff') {
+    return permission !== 'delete'
+  }
+  // 其他角色无权限
+  return false
 }
 
 /**
