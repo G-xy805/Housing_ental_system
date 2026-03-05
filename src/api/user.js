@@ -134,8 +134,10 @@ export function resetPassword(data) {
 }
 
 /**
- * 批量操作用户
- * @param {Object} data { user_ids, action }
+ * 批量操作用户（管理员）
+ * @param {Object} data 批量操作数据
+ * @param {string} data.action 操作类型（disable/enable/delete）
+ * @param {number[]} data.user_ids 用户ID数组
  * @returns {Promise}
  */
 export function batchActionUsers(data) {
@@ -146,6 +148,16 @@ export function batchActionUsers(data) {
  * 获取用户统计信息
  * @returns {Promise}
  */
-export function getUserStatistics() {
+export function getUserStats() {
   return request.get('/users/stats')
+}
+
+/**
+ * 更新用户状态（管理员）
+ * @param {number} id 用户 ID
+ * @param {Object} data 状态数据 { status: 'active' | 'resigned' | 'disabled' }
+ * @returns {Promise}
+ */
+export function updateUserStatus(id, data) {
+  return request.patch(`/users/${id}/status`, data)
 }

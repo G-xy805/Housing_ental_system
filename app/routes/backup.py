@@ -2,144 +2,35 @@
 数据备份路由模块
 提供数据库备份、恢复、备份管理等功能
 支持手动备份和自动定时备份
+
+API 接口：
+- POST /api/backup/create - 创建备份
+- GET /api/backup/list - 获取备份列表
+- GET /api/backup/download/<filename> - 下载备份文件
+- POST /api/backup/restore - 恢复备份
+- DELETE /api/backup/<filename> - 删除备份
+- GET /api/backup/settings - 获取备份设置
+- PUT /api/backup/settings - 更新备份设置
+- GET /api/backup/stats - 获取备份统计信息
+- GET /api/backup/health - 获取备份健康状态
+- GET /api/backup/alerts - 获取告警列表
+- POST /api/backup/verify/<filename> - 验证备份完整性
 """
 from flask import Blueprint, request, jsonify, g, current_app, send_file
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 import os
 import json
-import zipfile
-import shutil
-import sqlite3
-from pathlib import Path
+import traceback
 
-from app.models import db
+from app.models import db, BackupRecord
 from app.utils.decorators import login_required, admin_required
 from app.utils.responses import APIResponse
+from app.utils.backup_manager import get_backup_manager
+from app.utils.backup_monitor import get_backup_monitor
 
 # 创建蓝图
 backup_bp = Blueprint('backup', __name__, url_prefix='/api/backup')
-
-
-# ============================================================================
-# 辅助函数
-# ============================================================================
-
-def get_database_path() -> str:
-    """获取数据库文件路径"""
-    database_uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
-    if database_uri.startswith('sqlite:///'):
-        db_path = database_uri.replace('sqlite:///', '')
-        if not os.path.isabs(db_path):
-            db_path = os.path.join(current_app.instance_path or current_app.root_path, db_path)
-        return os.path.abspath(db_path)
-    return None
-
-
-def get_backup_folder() -> str:
-    """获取备份文件夹路径"""
-    return current_app.config.get('BACKUP_FOLDER', 'backups')
-
-
-def get_backup_settings() -> Dict:
-    """获取备份设置"""
-    settings_file = os.path.join(get_backup_folder(), 'backup_settings.json')
-    
-    default_settings = {
-        'auto_backup_enabled': True,
-        'backup_frequency': 'daily',  # daily, weekly
-        'backup_retention_count': 10,  # 保留最近 10 个备份
-        'backup_time': '02:00',  # 备份时间
-        'backup_uploads': True,  # 是否备份上传文件
-        'last_backup_time': None,
-        'last_backup_size': 0
-    }
-    
-    if os.path.exists(settings_file):
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                settings = json.load(f)
-                # 合并默认设置
-                default_settings.update(settings)
-        except Exception as e:
-            current_app.logger.error(f"读取备份设置失败：{str(e)}")
-    
-    return default_settings
-
-
-def save_backup_settings(settings: Dict) -> bool:
-    """保存备份设置"""
-    try:
-        backup_folder = get_backup_folder()
-        os.makedirs(backup_folder, exist_ok=True)
-        
-        settings_file = os.path.join(backup_folder, 'backup_settings.json')
-        
-        with open(settings_file, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, indent=2, ensure_ascii=False)
-        
-        return True
-    except Exception as e:
-        current_app.logger.error(f"保存备份设置失败：{str(e)}")
-        return False
-
-
-def create_backup_metadata(backup_path: str, remark: str = None) -> Dict:
-    """创建备份元数据"""
-    file_size = os.path.getsize(backup_path)
-    
-    metadata = {
-        'filename': os.path.basename(backup_path),
-        'backup_time': datetime.now().isoformat(),
-        'backup_type': 'manual',
-        'file_size': file_size,
-        'file_size_mb': round(file_size / (1024 * 1024), 2),
-        'database_path': get_database_path(),
-        'includes_uploads': get_backup_settings().get('backup_uploads', True),
-        'remark': remark,
-        'backup_by': g.username if hasattr(g, 'username') else 'system'
-    }
-    
-    return metadata
-
-
-def cleanup_old_backups(retention_count: int = 10):
-    """清理旧备份，保留最近的 N 个"""
-    try:
-        backup_folder = get_backup_folder()
-        
-        # 获取所有备份文件
-        backup_files = []
-        for filename in os.listdir(backup_folder):
-            if filename.startswith('housing_') and filename.endswith('.zip'):
-                filepath = os.path.join(backup_folder, filename)
-                backup_files.append({
-                    'filename': filename,
-                    'path': filepath,
-                    'mtime': os.path.getmtime(filepath)
-                })
-        
-        # 按修改时间排序
-        backup_files.sort(key=lambda x: x['mtime'], reverse=True)
-        
-        # 删除超出保留数量的备份
-        deleted_count = 0
-        for backup_file in backup_files[retention_count:]:
-            try:
-                os.remove(backup_file['path'])
-                # 同时删除元数据文件
-                meta_file = backup_file['path'].replace('.zip', '.meta.json')
-                if os.path.exists(meta_file):
-                    os.remove(meta_file)
-                deleted_count += 1
-                current_app.logger.info(f"清理旧备份：{backup_file['filename']}")
-            except Exception as e:
-                current_app.logger.error(f"清理备份失败 {backup_file['filename']}: {str(e)}")
-        
-        return deleted_count
-    except Exception as e:
-        current_app.logger.error(f"清理备份失败：{str(e)}")
-        return 0
 
 
 # ============================================================================
@@ -154,8 +45,11 @@ def create_backup():
     
     Request Body (可选):
         {
+            "backup_type": "full",  // full/incremental
             "remark": "备份备注",
-            "backup_uploads": true  // 是否包含上传文件
+            "include_uploads": true,  // 是否包含上传文件
+            "encrypt": true,  // 是否加密
+            "compress": true  // 是否压缩
         }
     
     Response:
@@ -163,122 +57,90 @@ def create_backup():
             "success": true,
             "message": "备份创建成功",
             "data": {
-                "filename": "housing_20240101_120000.zip",
+                "backup_id": "20240101_120000",
+                "filename": "backup_full_20240101_120000.enc.zip",
                 "backup_time": "2024-01-01T12:00:00",
                 "file_size": 1048576,
                 "file_size_mb": 1.0,
+                "backup_type": "full",
+                "encrypted": true,
+                "compressed": true,
                 "includes_uploads": true,
                 "remark": "备份备注"
             }
         }
     """
+    # 获取备份管理器和监控器
+    backup_manager = get_backup_manager()
+    backup_monitor = get_backup_monitor()
+    
+    # 记录备份开始
+    backup_id = None
+    
     try:
         # 获取请求数据
         data = request.get_json() or {}
+        backup_type = data.get('backup_type', 'full')
         remark = data.get('remark', '')
-        backup_uploads = data.get('backup_uploads', get_backup_settings().get('backup_uploads', True))
+        include_uploads = data.get('include_uploads', True)
+        encrypt = data.get('encrypt')
+        compress = data.get('compress')
         
-        # 获取路径
-        database_path = get_database_path()
-        backup_folder = get_backup_folder()
-        upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
+        # 记录备份开始
+        backup_id = backup_monitor.record_backup_start(backup_type)
         
-        if not database_path:
-            return APIResponse.bad_request("无法获取数据库路径")
+        # 创建备份
+        if backup_type == 'incremental':
+            # 增量备份（需要上次备份时间）
+            last_backup = BackupRecord.query.filter(
+                BackupRecord.status == 'success',
+                BackupRecord.deleted_at.is_(None)
+            ).order_by(BackupRecord.start_time.desc()).first()
+            
+            last_backup_time = last_backup.start_time if last_backup else None
+            
+            backup_info = backup_manager.create_incremental_backup(
+                last_backup_time=last_backup_time,
+                remark=remark,
+                encrypt=encrypt,
+                compress=compress
+            )
+        else:
+            # 完整备份
+            backup_info = backup_manager.create_full_backup(
+                remark=remark,
+                include_uploads=include_uploads,
+                encrypt=encrypt,
+                compress=compress
+            )
         
-        if not os.path.exists(database_path):
-            return APIResponse.bad_request("数据库文件不存在")
+        # 记录备份成功
+        backup_monitor.record_backup_success(backup_id, backup_info)
         
-        # 确保备份目录存在
-        os.makedirs(backup_folder, exist_ok=True)
+        # 保存到数据库
+        record = BackupRecord.create_from_backup_info(
+            backup_info=backup_info,
+            backup_id=backup_id,
+            backup_by=g.username if hasattr(g, 'username') else 'system'
+        )
+        record.backup_method = 'manual'
+        record.trigger = 'api'
+        db.session.add(record)
+        db.session.commit()
         
-        # 生成备份文件名
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        backup_filename = f'housing_{timestamp}.zip'
-        backup_path = os.path.join(backup_folder, backup_filename)
+        current_app.logger.info(f"用户 {g.username if hasattr(g, 'username') else 'unknown'} 创建了备份：{backup_info['filename']}")
         
-        # 创建临时目录
-        temp_dir = os.path.join(backup_folder, f'temp_{timestamp}')
-        os.makedirs(temp_dir, exist_ok=True)
+        return APIResponse.success({
+            'backup_id': backup_id,
+            **backup_info
+        }, "备份创建成功", 201)
         
-        try:
-            # 1. 复制数据库文件
-            db_backup_path = os.path.join(temp_dir, 'database.db')
-            shutil.copy2(database_path, db_backup_path)
-            
-            # 2. 复制上传文件（如果启用）
-            uploads_backup_path = None
-            if backup_uploads and os.path.exists(upload_folder):
-                uploads_backup_path = os.path.join(temp_dir, 'uploads')
-                shutil.copytree(upload_folder, uploads_backup_path)
-            
-            # 3. 创建元数据文件
-            metadata = {
-                'backup_time': datetime.now().isoformat(),
-                'backup_type': 'manual',
-                'backup_by': g.username if hasattr(g, 'username') else 'unknown',
-                'remark': remark,
-                'includes_uploads': backup_uploads,
-                'database_path': database_path,
-                'upload_folder': upload_folder if backup_uploads else None
-            }
-            
-            meta_file_path = os.path.join(temp_dir, 'metadata.json')
-            with open(meta_file_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
-            
-            # 4. 创建 ZIP 压缩包
-            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # 添加数据库文件
-                zipf.write(db_backup_path, 'database.db')
-                
-                # 添加元数据文件
-                zipf.write(meta_file_path, 'metadata.json')
-                
-                # 添加上传文件目录
-                if uploads_backup_path and os.path.exists(uploads_backup_path):
-                    for root, dirs, files in os.walk(uploads_backup_path):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            arcname = os.path.join('uploads', os.path.relpath(file_path, uploads_backup_path))
-                            zipf.write(file_path, arcname)
-            
-            # 5. 清理临时目录
-            shutil.rmtree(temp_dir)
-            
-            # 6. 更新备份设置
-            settings = get_backup_settings()
-            settings['last_backup_time'] = datetime.now().isoformat()
-            settings['last_backup_size'] = os.path.getsize(backup_path)
-            save_backup_settings(settings)
-            
-            # 7. 清理旧备份
-            retention_count = settings.get('backup_retention_count', 10)
-            deleted_count = cleanup_old_backups(retention_count)
-            
-            # 8. 准备响应数据
-            backup_metadata = create_backup_metadata(backup_path, remark)
-            
-            current_app.logger.info(f"用户 {g.username} 创建了备份：{backup_filename}")
-            
-            return APIResponse.success({
-                **backup_metadata,
-                'deleted_old_backups': deleted_count
-            }, "备份创建成功", 201)
-            
-        except Exception as e:
-            # 清理临时目录
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
-            
-            # 清理可能产生的不完整备份
-            if os.path.exists(backup_path):
-                os.remove(backup_path)
-            
-            raise e
-            
     except Exception as e:
-        current_app.logger.error(f"创建备份失败：{str(e)}")
+        # 记录备份失败
+        if backup_id:
+            backup_monitor.record_backup_failure(backup_id, str(e))
+        
+        current_app.logger.error(f"创建备份失败：{str(e)}\n{traceback.format_exc()}")
         return APIResponse.server_error(f"创建备份失败：{str(e)}")
 
 
@@ -295,6 +157,8 @@ def list_backups():
     Query Parameters:
         page: 页码，默认 1
         per_page: 每页数量，默认 20
+        backup_type: 备份类型过滤（full/incremental）
+        status: 状态过滤（success/failed/running）
         
     Response:
         {
@@ -302,11 +166,13 @@ def list_backups():
             "data": {
                 "items": [
                     {
-                        "filename": "housing_20240101_120000.zip",
+                        "backup_id": "20240101_120000",
+                        "filename": "backup_full_20240101_120000.enc.zip",
                         "backup_time": "2024-01-01T12:00:00",
                         "file_size": 1048576,
                         "file_size_mb": 1.0,
-                        "backup_type": "manual",
+                        "backup_type": "full",
+                        "status": "success",
                         "backup_by": "admin",
                         "remark": "月度备份"
                     }
@@ -314,7 +180,8 @@ def list_backups():
                 "pagination": {
                     "page": 1,
                     "per_page": 20,
-                    "total": 10
+                    "total": 10,
+                    "pages": 1
                 }
             }
         }
@@ -322,84 +189,33 @@ def list_backups():
     try:
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 20, type=int)
+        backup_type = request.args.get('backup_type')
+        status = request.args.get('status')
         
-        backup_folder = get_backup_folder()
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(BackupRecord).filter(BackupRecord.deleted_at.is_(None))
         
-        if not os.path.exists(backup_folder):
-            return APIResponse.success({
-                'items': [],
-                'pagination': {
-                    'page': page,
-                    'per_page': per_page,
-                    'total': 0,
-                    'pages': 0
-                }
-            }, "获取备份列表成功")
+        if backup_type:
+            query = query.filter(BackupRecord.backup_type == backup_type)
         
-        # 获取所有备份文件
-        backup_files = []
-        for filename in os.listdir(backup_folder):
-            if filename.startswith('housing_') and filename.endswith('.zip'):
-                filepath = os.path.join(backup_folder, filename)
-                
-                # 尝试读取元数据
-                meta_file = filepath.replace('.zip', '.meta.json')
-                metadata = {}
-                
-                if os.path.exists(meta_file):
-                    try:
-                        with open(meta_file, 'r', encoding='utf-8') as f:
-                            metadata = json.load(f)
-                    except:
-                        pass
-                
-                # 如果没有元数据文件，从 ZIP 中读取
-                if not metadata:
-                    try:
-                        with zipfile.ZipFile(filepath, 'r') as zipf:
-                            if 'metadata.json' in zipf.namelist():
-                                with zipf.open('metadata.json') as f:
-                                    metadata = json.load(f)
-                    except:
-                        pass
-                
-                # 获取文件信息
-                file_stat = os.stat(filepath)
-                
-                backup_files.append({
-                    'filename': filename,
-                    'filepath': filepath,
-                    'backup_time': metadata.get('backup_time', datetime.fromtimestamp(file_stat.st_mtime).isoformat()),
-                    'file_size': file_stat.st_size,
-                    'file_size_mb': round(file_stat.st_size / (1024 * 1024), 2),
-                    'backup_type': metadata.get('backup_type', 'unknown'),
-                    'backup_by': metadata.get('backup_by', 'unknown'),
-                    'remark': metadata.get('remark', ''),
-                    'includes_uploads': metadata.get('includes_uploads', False)
-                })
+        if status:
+            query = query.filter(BackupRecord.status == status)
         
-        # 按备份时间排序（最新的在前）
-        backup_files.sort(key=lambda x: x['backup_time'], reverse=True)
+        # 排序和分页
+        query = query.order_by(BackupRecord.start_time.desc())
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         
-        # 分页
-        total = len(backup_files)
-        pages = (total + per_page - 1) // per_page if per_page > 0 else 0
-        
-        start_idx = (page - 1) * per_page
-        end_idx = start_idx + per_page
-        paginated_items = backup_files[start_idx:end_idx]
+        items = [record.to_dict() for record in pagination.items]
         
         return APIResponse.success({
-            'items': paginated_items,
+            'items': items,
             'pagination': {
                 'page': page,
                 'per_page': per_page,
-                'total': total,
-                'pages': pages,
-                'has_next': page < pages,
-                'has_prev': page > 1,
-                'next_num': page + 1 if page < pages else None,
-                'prev_num': page - 1 if page > 1 else None
+                'total': pagination.total,
+                'pages': pagination.pages,
+                'has_next': pagination.has_next,
+                'has_prev': pagination.has_prev
             }
         }, "获取备份列表成功")
         
@@ -422,22 +238,30 @@ def download_backup(filename: str):
         filename: 备份文件名
     
     Response:
-        下载 ZIP 文件
+        下载备份文件
     """
     try:
         # 验证文件名安全性
-        if not filename.startswith('housing_') or not filename.endswith('.zip'):
+        if not (filename.startswith('backup_') or filename.startswith('auto_backup_')) or not (
+            filename.endswith('.db') or 
+            filename.endswith('.zip') or 
+            filename.endswith('.enc.zip') or
+            filename.endswith('.enc')
+        ):
             return APIResponse.bad_request("无效的备份文件名")
         
-        backup_folder = get_backup_folder()
+        backup_manager = get_backup_manager()
+        backup_folder = backup_manager.backup_folder
         backup_path = os.path.join(backup_folder, filename)
         
         if not os.path.exists(backup_path):
             return APIResponse.not_found("备份文件不存在")
         
+        current_app.logger.info(f"用户 {g.username if hasattr(g, 'username') else 'unknown'} 下载了备份：{filename}")
+        
         return send_file(
             backup_path,
-            mimetype='application/zip',
+            mimetype='application/octet-stream',
             as_attachment=True,
             download_name=filename
         )
@@ -459,7 +283,7 @@ def restore_backup():
     
     Request Body:
         {
-            "filename": "housing_20240101_120000.zip",
+            "filename": "backup_full_20240101_120000.enc.zip",
             "confirm": true  // 必须为 true 才执行恢复
         }
     
@@ -468,9 +292,9 @@ def restore_backup():
             "success": true,
             "message": "数据恢复成功",
             "data": {
-                "backup_file": "housing_20240101_120000.zip",
+                "backup_file": "backup_full_20240101_120000.enc.zip",
                 "restore_time": "2024-01-01T12:00:00",
-                "pre_backup_file": "housing_20240101_120001.zip"
+                "pre_backup_file": "backup_full_20240101_120001.enc.zip"
             }
         }
     """
@@ -491,133 +315,30 @@ def restore_backup():
             return APIResponse.bad_request("请确认恢复操作，设置 confirm=true")
         
         # 验证文件名安全性
-        if not filename.startswith('housing_') or not filename.endswith('.zip'):
+        if not (filename.startswith('backup_') or filename.startswith('auto_backup_')) or not (
+            filename.endswith('.db') or 
+            filename.endswith('.zip') or 
+            filename.endswith('.enc.zip') or
+            filename.endswith('.enc')
+        ):
             return APIResponse.bad_request("无效的备份文件名")
         
-        backup_folder = get_backup_folder()
-        backup_path = os.path.join(backup_folder, filename)
+        # 获取备份管理器
+        backup_manager = get_backup_manager()
+        backup_path = os.path.join(backup_manager.backup_folder, filename)
         
         if not os.path.exists(backup_path):
             return APIResponse.not_found("备份文件不存在")
         
-        # 获取当前数据库路径
-        database_path = get_database_path()
-        upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
+        # 执行恢复
+        restore_info = backup_manager.restore_backup(backup_path, create_pre_backup=True)
         
-        if not database_path:
-            return APIResponse.bad_request("无法获取数据库路径")
+        current_app.logger.info(f"管理员 {g.username} 恢复了备份：{filename}")
         
-        # 1. 创建当前数据的备份
-        current_app.logger.info("恢复前自动备份当前数据...")
-        
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        pre_backup_filename = f'housing_pre_restore_{timestamp}.zip'
-        pre_backup_path = os.path.join(backup_folder, pre_backup_filename)
-        
-        try:
-            # 创建临时目录
-            temp_dir = os.path.join(backup_folder, f'temp_pre_{timestamp}')
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # 复制当前数据库
-            if os.path.exists(database_path):
-                shutil.copy2(database_path, os.path.join(temp_dir, 'database.db'))
-            
-            # 复制上传文件
-            if os.path.exists(upload_folder):
-                shutil.copytree(upload_folder, os.path.join(temp_dir, 'uploads'))
-            
-            # 创建元数据
-            pre_metadata = {
-                'backup_time': datetime.now().isoformat(),
-                'backup_type': 'auto_before_restore',
-                'backup_by': g.username,
-                'remark': f'恢复 {filename} 前的自动备份',
-                'original_backup': filename
-            }
-            
-            with open(os.path.join(temp_dir, 'metadata.json'), 'w', encoding='utf-8') as f:
-                json.dump(pre_metadata, f, indent=2, ensure_ascii=False)
-            
-            # 创建 ZIP
-            with zipfile.ZipFile(pre_backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for root, dirs, files in os.walk(temp_dir):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, temp_dir)
-                        zipf.write(file_path, arcname)
-            
-            # 清理临时目录
-            shutil.rmtree(temp_dir)
-            
-            current_app.logger.info(f"创建恢复前备份：{pre_backup_filename}")
-            
-        except Exception as e:
-            current_app.logger.error(f"创建恢复前备份失败：{str(e)}")
-            # 继续恢复流程，但记录错误
-        
-        # 2. 解压备份文件
-        current_app.logger.info(f"开始恢复备份：{filename}")
-        
-        extract_dir = os.path.join(backup_folder, f'extract_{timestamp}')
-        os.makedirs(extract_dir, exist_ok=True)
-        
-        try:
-            with zipfile.ZipFile(backup_path, 'r') as zipf:
-                zipf.extractall(extract_dir)
-            
-            # 3. 恢复数据库
-            extracted_db = os.path.join(extract_dir, 'database.db')
-            if os.path.exists(extracted_db):
-                # 关闭数据库连接
-                db.session.close()
-                
-                # 复制数据库文件
-                shutil.copy2(extracted_db, database_path)
-                
-                current_app.logger.info("数据库恢复成功")
-            
-            # 4. 恢复上传文件（如果备份中包含）
-            extracted_uploads = os.path.join(extract_dir, 'uploads')
-            if os.path.exists(extracted_uploads):
-                # 备份当前上传文件
-                if os.path.exists(upload_folder):
-                    current_uploads_backup = os.path.join(backup_folder, f'uploads_backup_{timestamp}')
-                    shutil.move(upload_folder, current_uploads_backup)
-                
-                # 恢复上传文件
-                shutil.move(extracted_uploads, upload_folder)
-                
-                current_app.logger.info("上传文件恢复成功")
-            
-            # 5. 清理临时目录
-            shutil.rmtree(extract_dir)
-            
-            # 6. 更新备份设置
-            settings = get_backup_settings()
-            settings['last_restore_time'] = datetime.now().isoformat()
-            settings['last_restore_file'] = filename
-            save_backup_settings(settings)
-            
-            current_app.logger.info(f"用户 {g.username} 恢复了备份：{filename}")
-            
-            return APIResponse.success({
-                'backup_file': filename,
-                'restore_time': datetime.now().isoformat(),
-                'pre_backup_file': pre_backup_filename if os.path.exists(pre_backup_path) else None
-            }, "数据恢复成功")
-            
-        except Exception as e:
-            current_app.logger.error(f"恢复失败：{str(e)}")
-            
-            # 清理临时目录
-            if os.path.exists(extract_dir):
-                shutil.rmtree(extract_dir)
-            
-            return APIResponse.server_error(f"数据恢复失败：{str(e)}")
+        return APIResponse.success(restore_info, "数据恢复成功")
         
     except Exception as e:
-        current_app.logger.error(f"恢复数据失败：{str(e)}")
+        current_app.logger.error(f"恢复数据失败：{str(e)}\n{traceback.format_exc()}")
         return APIResponse.server_error(f"恢复数据失败：{str(e)}")
 
 
@@ -642,11 +363,16 @@ def delete_backup(filename: str):
     """
     try:
         # 验证文件名安全性
-        if not filename.startswith('housing_') or not filename.endswith('.zip'):
+        if not (filename.startswith('backup_') or filename.startswith('auto_backup_')) or not (
+            filename.endswith('.db') or 
+            filename.endswith('.zip') or 
+            filename.endswith('.enc.zip') or
+            filename.endswith('.enc')
+        ):
             return APIResponse.bad_request("无效的备份文件名")
         
-        backup_folder = get_backup_folder()
-        backup_path = os.path.join(backup_folder, filename)
+        backup_manager = get_backup_manager()
+        backup_path = os.path.join(backup_manager.backup_folder, filename)
         
         if not os.path.exists(backup_path):
             return APIResponse.not_found("备份文件不存在")
@@ -654,10 +380,14 @@ def delete_backup(filename: str):
         # 删除备份文件
         os.remove(backup_path)
         
-        # 删除元数据文件（如果存在）
-        meta_file = backup_path.replace('.zip', '.meta.json')
-        if os.path.exists(meta_file):
-            os.remove(meta_file)
+        # 更新数据库记录
+        record = BackupRecord.query.filter(
+            BackupRecord.filename == filename,
+            BackupRecord.deleted_at.is_(None)
+        ).first()
+        
+        if record:
+            record.soft_delete()
         
         current_app.logger.info(f"管理员 {g.username} 删除了备份：{filename}")
         
@@ -682,122 +412,347 @@ def get_backup_settings_route():
         {
             "success": true,
             "data": {
-                "auto_backup_enabled": true,
-                "backup_frequency": "daily",
-                "backup_retention_count": 10,
+                "enabled": true,
+                "frequency": "daily",
                 "backup_time": "02:00",
-                "backup_uploads": true,
-                "last_backup_time": "2024-01-01T02:00:00",
-                "last_backup_size": 1048576
+                "keep_count": 30,
+                "backup_type": "full"
             }
         }
     """
     try:
-        settings = get_backup_settings()
+        from app.models import BackupSettings
+        db_settings = BackupSettings.get_settings()
+        settings = db_settings.to_dict()
+        
         return APIResponse.success(settings, "获取备份设置成功")
+        
     except Exception as e:
         current_app.logger.error(f"获取备份设置失败：{str(e)}")
         return APIResponse.server_error("获取备份设置失败")
 
 
 @backup_bp.route('/settings', methods=['PUT'])
+@login_required
 @admin_required
 def update_backup_settings_route():
     """
-    更新备份设置（仅管理员）
+    更新备份设置
     
     Request Body:
         {
-            "auto_backup_enabled": true,
-            "backup_frequency": "daily",
-            "backup_retention_count": 10,
+            "enabled": true,
+            "frequency": "daily",
             "backup_time": "02:00",
-            "backup_uploads": true
+            "weekday": 1,
+            "day_of_month": 1,
+            "keep_count": 30,
+            "backup_type": "full"
         }
-    
+        
     Response:
         {
             "success": true,
-            "message": "备份设置更新成功",
-            "data": {...}
+            "message": "备份设置更新成功"
         }
     """
     try:
-        # 获取请求数据
         data = request.get_json()
         
         if not data:
             return APIResponse.bad_request("请求数据不能为空")
         
-        # 获取当前设置
-        current_settings = get_backup_settings()
+        from app.models import BackupSettings
         
-        # 更新允许的字段
-        allowed_fields = [
-            'auto_backup_enabled',
-            'backup_frequency',
-            'backup_retention_count',
-            'backup_time',
-            'backup_uploads'
-        ]
+        db_settings = BackupSettings.update_settings(data)
         
-        for field in allowed_fields:
-            if field in data:
-                current_settings[field] = data[field]
+        enabled = db_settings.enabled
+        frequency = db_settings.frequency
+        backup_time = db_settings.backup_time
+        keep_count = db_settings.keep_count
         
-        # 验证字段值
-        if current_settings['backup_frequency'] not in ['daily', 'weekly']:
-            return APIResponse.bad_request("备份频率必须是 daily 或 weekly")
+        config_updates = {
+            'BACKUP_AUTO_ENABLED': enabled,
+            'BACKUP_AUTO_TIME': backup_time,
+            'BACKUP_RETENTION_DAYS': keep_count,
+            'BACKUP_AUTO_FREQUENCY': frequency
+        }
         
-        if current_settings['backup_retention_count'] < 1 or current_settings['backup_retention_count'] > 100:
-            return APIResponse.bad_request("备份保留数量必须在 1-100 之间")
+        for key, value in config_updates.items():
+            current_app.config[key] = value
         
-        # 保存设置
-        if save_backup_settings(current_settings):
-            # 重新配置定时任务
-            try:
-                from app import scheduler
-                from app.routes.backup import schedule_auto_backup
-                
-                # 移除旧任务
-                if scheduler.get_job('auto_backup'):
-                    scheduler.remove_job('auto_backup')
-                
-                # 添加新任务
-                if current_settings['auto_backup_enabled']:
-                    if current_settings['backup_frequency'] == 'daily':
-                        hour, minute = map(int, current_settings['backup_time'].split(':'))
-                        scheduler.add_job(
-                            schedule_auto_backup,
-                            'cron',
-                            hour=hour,
-                            minute=minute,
-                            id='auto_backup',
-                            replace_existing=True
-                        )
-                    elif current_settings['backup_frequency'] == 'weekly':
-                        hour, minute = map(int, current_settings['backup_time'].split(':'))
-                        scheduler.add_job(
-                            schedule_auto_backup,
-                            'cron',
-                            hour=hour,
-                            minute=minute,
-                            day_of_week='mon',
-                            id='auto_backup',
-                            replace_existing=True
-                        )
-                    
-                    current_app.logger.info("重新配置自动备份任务成功")
-            except Exception as e:
-                current_app.logger.error(f"重新配置定时任务失败：{str(e)}")
+        # 重新配置调度器任务
+        try:
+            from app import scheduler
+            from app.routes.backup import schedule_auto_backup_full
             
-            return APIResponse.success(current_settings, "备份设置更新成功")
-        else:
-            return APIResponse.server_error("保存备份设置失败")
+            # 移除旧任务
+            scheduler.remove_job('auto_backup')
+            
+            # 解析新的备份时间
+            hour, minute = map(int, backup_time.split(':'))
+            
+            # 添加新任务
+            if frequency == 'daily':
+                scheduler.add_job(
+                    schedule_auto_backup_full,
+                    'cron',
+                    hour=hour,
+                    minute=minute,
+                    id='auto_backup',
+                    replace_existing=True
+                )
+                current_app.logger.info(f"已重新配置每日自动备份任务：{backup_time}")
+            elif frequency == 'weekly':
+                scheduler.add_job(
+                    schedule_auto_backup_full,
+                    'cron',
+                    hour=hour,
+                    minute=minute,
+                    day_of_week='mon',
+                    id='auto_backup',
+                    replace_existing=True
+                )
+                current_app.logger.info(f"已重新配置每周自动备份任务：周一 {backup_time}")
+            elif frequency == 'monthly':
+                scheduler.add_job(
+                    schedule_auto_backup_full,
+                    'cron',
+                    hour=hour,
+                    minute=minute,
+                    day=1,
+                    id='auto_backup',
+                    replace_existing=True
+                )
+                current_app.logger.info(f"已重新配置每月自动备份任务：1日 {backup_time}")
+        except Exception as e:
+            current_app.logger.warning(f"重新配置调度器失败: {str(e)}")
+        
+        current_app.logger.info(f"管理员 {g.username} 更新了备份设置: {data}")
+        
+        return APIResponse.success(db_settings.to_dict(), "备份设置更新成功")
         
     except Exception as e:
         current_app.logger.error(f"更新备份设置失败：{str(e)}")
         return APIResponse.server_error("更新备份设置失败")
+
+
+# ============================================================================
+# 备份统计接口
+# ============================================================================
+
+@backup_bp.route('/stats', methods=['GET'])
+@login_required
+def get_backup_stats():
+    """
+    获取备份统计信息
+    
+    Query Parameters:
+        days: 统计天数，默认 30
+    
+    Response:
+        {
+            "success": true,
+            "data": {
+                "total_backups": 100,
+                "successful_backups": 95,
+                "failed_backups": 5,
+                "success_rate": 95.0,
+                "average_size": 1048576,
+                "average_size_mb": 1.0,
+                "total_size": 104857600,
+                "total_size_mb": 100.0,
+                "average_duration": 5.5,
+                "period_days": 30
+            }
+        }
+    """
+    try:
+        days = request.args.get('days', 30, type=int)
+        
+        # 从数据库获取统计
+        stats = BackupRecord.get_statistics(days)
+        
+        # 从监控器获取实时统计
+        backup_monitor = get_backup_monitor()
+        monitor_stats = backup_monitor.get_stats()
+        
+        # 合并统计信息
+        result = {
+            **stats,
+            'backup_folder_size': monitor_stats.get('backup_folder_size', 0),
+            'backup_folder_size_mb': monitor_stats.get('backup_folder_size_mb', 0),
+            'disk_usage': monitor_stats.get('disk_usage'),
+            'last_backup_time': monitor_stats.get('last_backup_time'),
+            'last_backup_status': monitor_stats.get('last_backup_status')
+        }
+        
+        return APIResponse.success(result, "获取备份统计信息成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取备份统计信息失败：{str(e)}")
+        return APIResponse.server_error("获取备份统计信息失败")
+
+
+# ============================================================================
+# 备份健康状态接口
+# ============================================================================
+
+@backup_bp.route('/health', methods=['GET'])
+@login_required
+def get_backup_health():
+    """
+    获取备份健康状态
+    
+    Response:
+        {
+            "success": true,
+            "data": {
+                "status": "healthy",
+                "issues": [],
+                "recommendations": []
+            }
+        }
+    """
+    try:
+        backup_monitor = get_backup_monitor()
+        health = backup_monitor.get_health_status()
+        
+        return APIResponse.success(health, "获取备份健康状态成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取备份健康状态失败：{str(e)}")
+        return APIResponse.server_error("获取备份健康状态失败")
+
+
+# ============================================================================
+# 备份告警接口
+# ============================================================================
+
+@backup_bp.route('/alerts', methods=['GET'])
+@login_required
+def get_backup_alerts():
+    """
+    获取备份告警列表
+    
+    Query Parameters:
+        level: 告警级别过滤（info/warning/error/critical）
+        acknowledged: 是否已确认（true/false）
+        limit: 返回数量限制，默认 50
+    
+    Response:
+        {
+            "success": true,
+            "data": {
+                "alerts": [
+                    {
+                        "id": "20240101_120000_123456",
+                        "level": "error",
+                        "message": "备份失败",
+                        "backup_id": "20240101_120000",
+                        "timestamp": "2024-01-01T12:00:00",
+                        "acknowledged": false
+                    }
+                ]
+            }
+        }
+    """
+    try:
+        level = request.args.get('level')
+        acknowledged = request.args.get('acknowledged', type=lambda x: x.lower() == 'true' if x else None)
+        limit = request.args.get('limit', 50, type=int)
+        
+        backup_monitor = get_backup_monitor()
+        alerts = backup_monitor.get_alerts(level=level, acknowledged=acknowledged, limit=limit)
+        
+        return APIResponse.success({
+            'alerts': alerts
+        }, "获取备份告警列表成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取备份告警列表失败：{str(e)}")
+        return APIResponse.server_error("获取备份告警列表失败")
+
+
+@backup_bp.route('/alerts/<alert_id>/acknowledge', methods=['POST'])
+@admin_required
+def acknowledge_alert(alert_id: str):
+    """
+    确认告警（仅管理员）
+    
+    Path Parameters:
+        alert_id: 告警 ID
+    
+    Response:
+        {
+            "success": true,
+            "message": "告警已确认"
+        }
+    """
+    try:
+        backup_monitor = get_backup_monitor()
+        success = backup_monitor.acknowledge_alert(alert_id)
+        
+        if success:
+            return APIResponse.success(None, "告警已确认")
+        else:
+            return APIResponse.not_found("告警不存在")
+        
+    except Exception as e:
+        current_app.logger.error(f"确认告警失败：{str(e)}")
+        return APIResponse.server_error("确认告警失败")
+
+
+# ============================================================================
+# 备份验证接口
+# ============================================================================
+
+@backup_bp.route('/verify/<filename>', methods=['POST'])
+@login_required
+def verify_backup(filename: str):
+    """
+    验证备份完整性
+    
+    Path Parameters:
+        filename: 备份文件名
+    
+    Response:
+        {
+            "success": true,
+            "data": {
+                "valid": true,
+                "backup_path": "/path/to/backup",
+                "errors": [],
+                "metadata": {}
+            }
+        }
+    """
+    try:
+        # 验证文件名安全性
+        if not filename.startswith('backup_') or not (
+            filename.endswith('.db') or 
+            filename.endswith('.zip') or 
+            filename.endswith('.enc')
+        ):
+            return APIResponse.bad_request("无效的备份文件名")
+        
+        backup_manager = get_backup_manager()
+        backup_path = os.path.join(backup_manager.backup_folder, filename)
+        
+        if not os.path.exists(backup_path):
+            return APIResponse.not_found("备份文件不存在")
+        
+        # 验证备份
+        result = backup_manager.verify_backup(backup_path)
+        
+        if result['valid']:
+            return APIResponse.success(result, "备份验证通过")
+        else:
+            return APIResponse.success(result, "备份验证失败")
+        
+    except Exception as e:
+        current_app.logger.error(f"验证备份失败：{str(e)}")
+        return APIResponse.server_error(f"验证备份失败：{str(e)}")
 
 
 # ============================================================================
@@ -806,120 +761,222 @@ def update_backup_settings_route():
 
 def schedule_auto_backup():
     """定时自动备份任务"""
+    import os
+    import sqlite3
+    import shutil
+    from datetime import datetime
+    
+    print("开始执行自动备份任务...")
+    
     try:
-        current_app.logger.info("开始执行自动备份任务...")
+        # 获取项目根目录
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         
-        # 使用应用上下文
-        with current_app.app_context():
-            # 创建备份
-            backup_folder = get_backup_folder()
-            database_path = get_database_path()
-            upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
+        # 数据库路径
+        db_path = os.path.join(base_dir, 'instance', 'housing_rental.db')
+        
+        # 备份目录
+        backup_dir = os.path.join(base_dir, 'backups')
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        # 生成备份文件名
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_filename = f'auto_backup_{timestamp}.db'
+        backup_path = os.path.join(backup_dir, backup_filename)
+        
+        # 复制数据库文件（基础备份）
+        if os.path.exists(db_path):
+            shutil.copy2(db_path, backup_path)
+            print(f"自动备份成功：{backup_filename}")
             
-            if not database_path or not os.path.exists(database_path):
-                current_app.logger.error("数据库文件不存在，跳过自动备份")
-                return
+            # 记录到数据库
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
             
-            # 生成备份文件名
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_filename = f'housing_auto_{timestamp}.zip'
-            backup_path = os.path.join(backup_folder, backup_filename)
+            # 检查 backup_records 表是否存在
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_records'")
+            if cursor.fetchone():
+                backup_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                cursor.execute("""
+                    INSERT INTO backup_records 
+                    (backup_id, backup_type, status, start_time, end_time, filename, file_path, file_size, backup_by, backup_method, trigger, created_at, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    backup_id,
+                    'full',
+                    'success',
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    backup_filename,
+                    backup_path,
+                    os.path.getsize(backup_path),
+                    'system',
+                    'auto',
+                    'scheduled',
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    1
+                ))
+                conn.commit()
             
-            # 创建临时目录
-            temp_dir = os.path.join(backup_folder, f'temp_auto_{timestamp}')
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            try:
-                # 复制数据库文件
-                shutil.copy2(database_path, os.path.join(temp_dir, 'database.db'))
-                
-                # 复制上传文件
-                settings = get_backup_settings()
-                if settings.get('backup_uploads', True) and os.path.exists(upload_folder):
-                    shutil.copytree(upload_folder, os.path.join(temp_dir, 'uploads'))
-                
-                # 创建元数据
-                metadata = {
-                    'backup_time': datetime.now().isoformat(),
-                    'backup_type': 'auto',
-                    'backup_by': 'system',
-                    'remark': '系统自动备份',
-                    'includes_uploads': settings.get('backup_uploads', True)
-                }
-                
-                with open(os.path.join(temp_dir, 'metadata.json'), 'w', encoding='utf-8') as f:
-                    json.dump(metadata, f, indent=2, ensure_ascii=False)
-                
-                # 创建 ZIP
-                with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    for root, dirs, files in os.walk(temp_dir):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            arcname = os.path.relpath(file_path, temp_dir)
-                            zipf.write(file_path, arcname)
-                
-                # 清理临时目录
-                shutil.rmtree(temp_dir)
-                
-                # 更新设置
-                settings['last_backup_time'] = datetime.now().isoformat()
-                settings['last_backup_size'] = os.path.getsize(backup_path)
-                save_backup_settings(settings)
-                
-                # 清理旧备份
-                retention_count = settings.get('backup_retention_count', 10)
-                deleted_count = cleanup_old_backups(retention_count)
-                
-                current_app.logger.info(f"自动备份成功：{backup_filename}, 清理了 {deleted_count} 个旧备份")
-                
-            except Exception as e:
-                current_app.logger.error(f"自动备份失败：{str(e)}")
-                if os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir)
-                
+            conn.close()
+        else:
+            print(f"数据库文件不存在：{db_path}")
+        
     except Exception as e:
-        current_app.logger.error(f"自动备份任务执行失败：{str(e)}")
+        import traceback
+        traceback.print_exc()
+        print(f"自动备份任务执行失败：{str(e)}")
+
+
+def schedule_auto_backup_full():
+    """
+    完整自动备份任务（推荐使用）
+    
+    使用 BackupManager 创建与手动备份相同格式的备份：
+    - 加密压缩
+    - 包含上传文件
+    - 完整元数据
+    """
+    import os
+    from datetime import datetime
+    
+    print("开始执行完整自动备份任务...")
+    
+    try:
+        # 获取项目根目录
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        # 数据库路径
+        db_path = os.path.join(base_dir, 'instance', 'housing_rental.db')
+        
+        # 导入备份管理器
+        from app.utils.backup_manager import get_backup_manager
+        
+        # 获取全局备份管理器实例
+        backup_manager = get_backup_manager()
+        
+        # 创建完整备份
+        backup_info = backup_manager.create_full_backup(
+            remark='系统自动备份',
+            include_uploads=True
+        )
+        
+        print(f"完整自动备份成功：{backup_info['filename']}")
+        
+        # 记录到数据库
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_records'")
+        if cursor.fetchone():
+            backup_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+            import json
+            cursor.execute("""
+                INSERT INTO backup_records 
+                (backup_id, backup_type, status, start_time, end_time, filename, file_path, file_size, 
+                 file_hash, encrypted, compressed, includes_uploads, backup_by, backup_method, trigger, 
+                 backup_metadata, created_at, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                backup_id,
+                'full',
+                'success',
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                backup_info.get('filename'),
+                backup_info.get('backup_path'),
+                backup_info.get('file_size'),
+                backup_info.get('file_hash'),
+                1 if backup_info.get('encrypted') else 0,
+                1 if backup_info.get('compressed') else 0,
+                1 if backup_info.get('includes_uploads') else 0,
+                'system',
+                'auto',
+                'scheduled',
+                json.dumps(backup_info),
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                1
+            ))
+            conn.commit()
+        
+        conn.close()
+        
+        # 清理过期备份
+        deleted_count = backup_manager.cleanup_old_backups()
+        if deleted_count > 0:
+            print(f"清理了 {deleted_count} 个过期备份")
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"完整自动备份任务执行失败：{str(e)}")
 
 
 def init_auto_backup(app):
-    """初始化自动备份任务"""
+    """
+    初始化自动备份任务
+    在调度器启动前添加定时任务
+    """
+    from app import scheduler
+    
     try:
-        # 在应用上下文中获取设置
+        backup_time = '02:00'
+        backup_frequency = 'daily'
+        weekday = 1
+        
         with app.app_context():
-            settings = get_backup_settings()
+            from app.models import BackupSettings
             
-            if not settings.get('auto_backup_enabled', True):
+            db_settings = BackupSettings.get_settings()
+            
+            if not db_settings.enabled:
                 app.logger.info("自动备份已禁用")
                 return
             
-            # 从 app 获取 scheduler
-            from app import scheduler
-            
-            # 配置定时任务
-            if settings['backup_frequency'] == 'daily':
-                hour, minute = map(int, settings['backup_time'].split(':'))
-                scheduler.add_job(
-                    schedule_auto_backup,
-                    'cron',
-                    hour=hour,
-                    minute=minute,
-                    id='auto_backup',
-                    replace_existing=True
-                )
-                app.logger.info(f"已配置每日自动备份任务：{settings['backup_time']}")
-            
-            elif settings['backup_frequency'] == 'weekly':
-                hour, minute = map(int, settings['backup_time'].split(':'))
-                scheduler.add_job(
-                    schedule_auto_backup,
-                    'cron',
-                    hour=hour,
-                    minute=minute,
-                    day_of_week='mon',
-                    id='auto_backup',
-                    replace_existing=True
-                )
-                app.logger.info(f"已配置每周自动备份任务：周一 {settings['backup_time']}")
+            backup_time = db_settings.backup_time
+            backup_frequency = db_settings.frequency
+            weekday = db_settings.weekday
+        
+        hour, minute = map(int, backup_time.split(':'))
+        
+        if backup_frequency == 'daily':
+            scheduler.add_job(
+                schedule_auto_backup,
+                'cron',
+                hour=hour,
+                minute=minute,
+                id='auto_backup',
+                replace_existing=True
+            )
+            app.logger.info(f"已配置每日自动备份任务：{backup_time}")
+        
+        elif backup_frequency == 'weekly':
+            weekday_map = {0: 'sun', 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri', 6: 'sat'}
+            day_of_week = weekday_map.get(weekday, 'mon')
+            scheduler.add_job(
+                schedule_auto_backup,
+                'cron',
+                hour=hour,
+                minute=minute,
+                day_of_week=day_of_week,
+                id='auto_backup',
+                replace_existing=True
+            )
+            weekday_names = {0: '周日', 1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六'}
+            app.logger.info(f"已配置每周自动备份任务：{weekday_names.get(weekday, '周一')} {backup_time}")
+        
+        elif backup_frequency == 'monthly':
+            scheduler.add_job(
+                schedule_auto_backup,
+                'cron',
+                hour=hour,
+                minute=minute,
+                day=1,
+                id='auto_backup',
+                replace_existing=True
+            )
+            app.logger.info(f"已配置每月自动备份任务：1日 {backup_time}")
             
     except Exception as e:
         app.logger.error(f"初始化自动备份任务失败：{str(e)}")

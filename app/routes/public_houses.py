@@ -107,12 +107,14 @@ def get_public_houses():
         
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        page_size = request.args.get('page_size', type=int)
+        per_page_arg = request.args.get('per_page', type=int)
+        per_page = min(page_size or per_page_arg or 20, 100)
         
         current_app.logger.info(f"分页参数：page={page}, per_page={per_page}")
         
-        # 构建查询
-        query = House.query
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(House).filter(House.deleted_at.is_(None))
         
         # 城市筛选
         city = request.args.get('city')

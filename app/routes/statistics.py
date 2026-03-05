@@ -1306,3 +1306,487 @@ def export_statistics_pdf():
     except Exception as e:
         current_app.logger.error(f"导出 PDF 失败：{str(e)}")
         return APIResponse.server_error(f"导出 PDF 失败：{str(e)}")
+
+
+# ============================================================================
+# 仪表盘统计数据接口 (GET /api/statistics/dashboard)
+# ============================================================================
+
+@statistics_bp.route('/dashboard', methods=['GET'])
+@login_required
+def get_dashboard_statistics():
+    """
+    获取仪表盘统计数据
+    
+    Query Parameters:
+        period: 统计周期 (today/week/month/year)，默认 month
+        
+    Response:
+        {
+            "success": true,
+            "data": {
+                "houses": {
+                    "total": 100,
+                    "available": 60,
+                    "rented": 35,
+                    "maintenance": 5,
+                    "occupancy_rate": 0.35
+                },
+                "income": {
+                    "current_period": 150000.00,
+                    "previous_period": 130000.00,
+                    "growth_rate": 0.1538
+                },
+                "contracts": {
+                    "total": 150,
+                    "active": 80,
+                    "expiring_soon": 12
+                },
+                "tenants": {
+                    "total": 200,
+                    "active": 120
+                }
+            }
+        }
+    """
+    try:
+        # 获取周期参数
+        period = request.args.get('period', 'month')
+        
+        # 计算日期范围
+        end_date = date.today()
+        if period == 'today':
+            start_date = end_date
+        elif period == 'week':
+            start_date = end_date - timedelta(days=7)
+        elif period == 'month':
+            start_date = end_date - timedelta(days=30)
+        elif period == 'year':
+            start_date = end_date - timedelta(days=365)
+        else:
+            start_date = end_date - timedelta(days=30)
+        
+        # 上一个周期
+        period_days = (end_date - start_date).days
+        prev_start_date = start_date - timedelta(days=period_days) if period_days > 0 else start_date - timedelta(days=30)
+        prev_end_date = start_date - timedelta(days=1)
+        
+        # 房源统计
+        total_houses = House.query.count()
+        available_houses = House.query.filter(House.status == 'available').count()
+        rented_houses = House.query.filter(House.status == 'rented').count()
+        maintenance_houses = House.query.filter(House.status == 'maintenance').count()
+        
+        # 出租率
+        occupancy_rate = rented_houses / total_houses if total_houses > 0 else 0
+        
+        # 收入统计（当前周期）
+        current_income = db.session.query(
+            func.sum(Payment.paid_amount)
+        ).filter(
+            Payment.status == 'paid',
+            Payment.payment_date >= start_date,
+            Payment.payment_date <= end_date
+        ).scalar() or 0.0
+        
+        # 收入统计（上一周期）
+        prev_income = db.session.query(
+            func.sum(Payment.paid_amount)
+        ).filter(
+            Payment.status == 'paid',
+            Payment.payment_date >= prev_start_date,
+            Payment.payment_date <= prev_end_date
+        ).scalar() or 0.0
+        
+        # 收入增长率
+        income_growth = (current_income - prev_income) / prev_income if prev_income > 0 else 0
+        
+        # 合同统计
+        total_contracts = Contract.query.count()
+        active_contracts = Contract.query.filter(Contract.status == 'active').count()
+        
+        # 即将到期合同（30 天内）
+        expiring_soon = Contract.query.filter(
+            Contract.status == 'active',
+            Contract.end_date >= end_date,
+            Contract.end_date <= end_date + timedelta(days=30)
+        ).count()
+        
+        # 租客统计
+        total_tenants = Tenant.query.count()
+        active_tenants = Tenant.query.filter(Tenant.status == 'active').count()
+        
+        return APIResponse.success({
+            'houses': {
+                'total': total_houses,
+                'available': available_houses,
+                'rented': rented_houses,
+                'maintenance': maintenance_houses,
+                'occupancy_rate': round(occupancy_rate, 4)
+            },
+            'income': {
+                'current_period': round(current_income, 2),
+                'previous_period': round(prev_income, 2),
+                'growth_rate': round(income_growth, 4),
+                'period': period
+            },
+            'contracts': {
+                'total': total_contracts,
+                'active': active_contracts,
+                'expiring_soon': expiring_soon
+            },
+            'tenants': {
+                'total': total_tenants,
+                'active': active_tenants
+            },
+            'period': {
+                'start': start_date.isoformat(),
+                'end': end_date.isoformat()
+            }
+        }, "获取仪表盘统计成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取仪表盘统计失败：{str(e)}")
+        return APIResponse.server_error("获取仪表盘统计失败")
+
+
+# ============================================================================
+# 收入统计接口 (GET /api/statistics/revenue)
+# ============================================================================
+
+@statistics_bp.route('/revenue', methods=['GET'])
+@login_required
+def get_revenue_statistics():
+    """
+    获取收入统计
+    
+    Query Parameters:
+        period: 时间周期 (monthly/quarterly/yearly)，默认 monthly
+        months: 统计月数，默认 12
+        payment_type: 支付类型筛选 (rent/deposit/utility/other)
+        
+    Response:
+        {
+            "success": true,
+            "data": {
+                "monthly_trend": [...],
+                "yearly_comparison": [...],
+                "by_type": {...},
+                "summary": {...}
+            }
+        }
+    """
+    try:
+        period = request.args.get('period', 'monthly')
+        months = request.args.get('months', 12, type=int)
+        payment_type = request.args.get('payment_type')
+        
+        result = {}
+        
+        # 月度收入趋势
+        if period == 'monthly' or period == 'all':
+            monthly_trend = []
+            end_date = date.today()
+            
+            for i in range(months - 1, -1, -1):
+                month_date = end_date - timedelta(days=30 * i)
+                month_start = month_date.replace(day=1)
+                # 计算月末
+                if month_date.month == 12:
+                    month_end = month_date.replace(day=31)
+                else:
+                    next_month = month_date.replace(month=month_date.month + 1, day=1)
+                    month_end = next_month - timedelta(days=1)
+                
+                # 查询该月的收入
+                query = db.session.query(
+                    func.sum(Payment.paid_amount).label('total')
+                ).filter(
+                    Payment.status == 'paid',
+                    Payment.payment_date >= month_start,
+                    Payment.payment_date <= month_end
+                )
+                
+                if payment_type:
+                    query = query.filter(Payment.payment_type == payment_type)
+                
+                income = query.scalar() or 0.0
+                
+                # 查询该月的支付笔数
+                count_query = db.session.query(func.count(Payment.id)).filter(
+                    Payment.status == 'paid',
+                    Payment.payment_date >= month_start,
+                    Payment.payment_date <= month_end
+                )
+                if payment_type:
+                    count_query = count_query.filter(Payment.payment_type == payment_type)
+                
+                paid_count = count_query.scalar() or 0
+                
+                monthly_trend.append({
+                    'month': month_date.strftime('%Y-%m'),
+                    'income': round(income, 2),
+                    'paid_count': paid_count
+                })
+            
+            result['monthly_trend'] = monthly_trend
+        
+        # 年度收入对比
+        if period == 'yearly' or period == 'all':
+            yearly_comparison = []
+            current_year = datetime.now().year
+            
+            for i in range(2, -1, -1):
+                year = current_year - i
+                
+                query = db.session.query(
+                    func.sum(Payment.paid_amount).label('total')
+                ).filter(
+                    Payment.status == 'paid',
+                    extract('year', Payment.payment_date) == year
+                )
+                
+                if payment_type:
+                    query = query.filter(Payment.payment_type == payment_type)
+                
+                income = query.scalar() or 0.0
+                
+                yearly_comparison.append({
+                    'year': year,
+                    'income': round(income, 2),
+                    'growth_rate': None
+                })
+            
+            # 计算增长率
+            for i in range(1, len(yearly_comparison)):
+                prev_income = yearly_comparison[i-1]['income']
+                curr_income = yearly_comparison[i]['income']
+                if prev_income > 0:
+                    yearly_comparison[i]['growth_rate'] = round((curr_income - prev_income) / prev_income, 4)
+            
+            result['yearly_comparison'] = yearly_comparison
+        
+        # 收入构成
+        by_type_query = db.session.query(
+            Payment.payment_type,
+            func.sum(Payment.paid_amount).label('total')
+        ).filter(
+            Payment.status == 'paid'
+        ).group_by(Payment.payment_type).all()
+        
+        result['by_type'] = {
+            stat.payment_type: round(stat.total, 2) for stat in by_type_query
+        }
+        
+        # 汇总统计
+        total_income_query = db.session.query(
+            func.sum(Payment.paid_amount)
+        ).filter(Payment.status == 'paid')
+        
+        if payment_type:
+            total_income_query = total_income_query.filter(Payment.payment_type == payment_type)
+        
+        total_income = total_income_query.scalar() or 0.0
+        
+        total_paid = db.session.query(func.count(Payment.id)).filter(
+            Payment.status == 'paid'
+        ).scalar() or 0
+        
+        total_pending = db.session.query(func.count(Payment.id)).filter(
+            Payment.status == 'pending'
+        ).scalar() or 0
+        
+        total_overdue = db.session.query(func.count(Payment.id)).filter(
+            Payment.status == 'overdue'
+        ).scalar() or 0
+        
+        result['summary'] = {
+            'total_income': round(total_income, 2),
+            'total_paid': total_paid,
+            'total_pending': total_pending,
+            'total_overdue': total_overdue,
+            'collection_rate': round(total_paid / (total_paid + total_pending + total_overdue), 4) if (total_paid + total_pending + total_overdue) > 0 else 0
+        }
+        
+        return APIResponse.success(result, "获取收入统计成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取收入统计失败：{str(e)}")
+        return APIResponse.server_error("获取收入统计失败")
+
+
+# ============================================================================
+# 房源出租率统计接口 (GET /api/statistics/occupancy)
+# ============================================================================
+
+@statistics_bp.route('/occupancy', methods=['GET'])
+@login_required
+def get_occupancy_statistics():
+    """
+    获取房源出租率统计
+    
+    Query Parameters:
+        group_by: 分组维度 (city/district/all)
+        include_trend: 是否包含趋势数据，默认 false
+        
+    Response:
+        {
+            "success": true,
+            "data": {
+                "occupancy_rate": 0.70,
+                "by_city": {...},
+                "by_district": {...},
+                "trend": [...]
+            }
+        }
+    """
+    try:
+        group_by = request.args.get('group_by', '')
+        include_trend = request.args.get('include_trend', 'false').lower() == 'true'
+        
+        result = {}
+        
+        # 总体统计
+        total_houses = House.query.count()
+        rented_houses = House.query.filter(House.status == 'rented').count()
+        available_houses = House.query.filter(House.status == 'available').count()
+        maintenance_houses = House.query.filter(House.status == 'maintenance').count()
+        
+        occupancy_rate = rented_houses / total_houses if total_houses > 0 else 0
+        
+        result['occupancy_rate'] = round(occupancy_rate, 4)
+        result['total'] = total_houses
+        result['rented'] = rented_houses
+        result['available'] = available_houses
+        result['maintenance'] = maintenance_houses
+        
+        # 按城市分布
+        if group_by == 'city' or group_by == 'all':
+            city_stats = db.session.query(
+                House.city,
+                func.count(House.id).label('total'),
+                func.sum(case((House.status == 'rented', 1), else_=0)).label('rented')
+            ).filter(
+                House.city.isnot(None)
+            ).group_by(House.city).all()
+            
+            result['by_city'] = {}
+            for stat in city_stats:
+                rate = stat.rented / stat.total if stat.total > 0 else 0
+                result['by_city'][stat.city] = {
+                    'total': stat.total,
+                    'rented': stat.rented,
+                    'occupancy_rate': round(rate, 4)
+                }
+        
+        # 按区县分布
+        if group_by == 'district' or group_by == 'all':
+            district_stats = db.session.query(
+                House.district,
+                func.count(House.id).label('total'),
+                func.sum(case((House.status == 'rented', 1), else_=0)).label('rented')
+            ).filter(
+                House.district.isnot(None)
+            ).group_by(House.district).all()
+            
+            result['by_district'] = {}
+            for stat in district_stats:
+                rate = stat.rented / stat.total if stat.total > 0 else 0
+                result['by_district'][stat.district] = {
+                    'total': stat.total,
+                    'rented': stat.rented,
+                    'occupancy_rate': round(rate, 4)
+                }
+        
+        # 出租率趋势
+        if include_trend:
+            trend = []
+            end_date = date.today()
+            
+            for i in range(11, -1, -1):
+                month_date = end_date - timedelta(days=30 * i)
+                month_str = month_date.strftime('%Y-%m')
+                
+                # 简化计算：使用当前状态
+                trend.append({
+                    'month': month_str,
+                    'rate': round(occupancy_rate, 4)
+                })
+            
+            result['trend'] = trend
+        
+        return APIResponse.success(result, "获取出租率统计成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取出租率统计失败：{str(e)}")
+        return APIResponse.server_error("获取出租率统计失败")
+
+
+# ============================================================================
+# 合同到期提醒接口 (GET /api/statistics/expiring-contracts)
+# ============================================================================
+
+@statistics_bp.route('/expiring-contracts', methods=['GET'])
+@login_required
+def get_expiring_contracts():
+    """
+    获取合同到期提醒
+    
+    Query Parameters:
+        days: 查询未来多少天内到期的合同，默认 30
+        
+    Response:
+        {
+            "success": true,
+            "data": {
+                "count": 12,
+                "contracts": [...]
+            }
+        }
+    """
+    try:
+        days = request.args.get('days', 30, type=int)
+        
+        today = date.today()
+        end_date = today + timedelta(days=days)
+        
+        # 查询即将到期的合同
+        expiring_contracts = Contract.query.filter(
+            Contract.status == 'active',
+            Contract.end_date >= today,
+            Contract.end_date <= end_date
+        ).order_by(Contract.end_date).all()
+        
+        contracts_list = []
+        for contract in expiring_contracts:
+            contract_data = {
+                'id': contract.id,
+                'contract_no': contract.contract_no,
+                'title': contract.title,
+                'end_date': contract.end_date.isoformat(),
+                'days_until_expiry': (contract.end_date - today).days,
+                'status': contract.status,
+                'rent_amount': contract.rent_amount
+            }
+            
+            # 添加租客信息
+            if contract.tenant_rel:
+                contract_data['tenant_name'] = contract.tenant_rel.name
+                contract_data['tenant_phone'] = contract.tenant_rel.phone
+            
+            # 添加房源信息
+            if contract.house:
+                contract_data['house_title'] = contract.house.title
+                contract_data['house_address'] = contract.house.address
+            
+            contracts_list.append(contract_data)
+        
+        return APIResponse.success({
+            'count': len(contracts_list),
+            'total': len(contracts_list),
+            'contracts': contracts_list
+        }, "获取到期合同提醒成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取到期合同提醒失败：{str(e)}")
+        return APIResponse.server_error("获取到期合同提醒失败")

@@ -168,6 +168,11 @@ def validate_landlord_data(data: Dict, is_update: bool = False) -> tuple:
     if 'remark' in data:
         validated_data['remark'] = data.get('remark', '').strip()
     
+    # 照片（可选）
+    if 'photo' in data:
+        photo = data.get('photo', '').strip()
+        validated_data['photo'] = photo if photo else None
+    
     if errors:
         return False, '; '.join(errors), None
     
@@ -204,6 +209,8 @@ def check_id_card_duplicate(id_card: str, exclude_id: int = None) -> Optional[La
     """
     检查身份证号是否已存在（使用加密存储）
     
+    由于 AES-GCM 加密每次生成不同的密文，需要遍历解密比较
+    
     Args:
         id_card: 身份证号
         exclude_id: 排除的房东 ID（更新时使用）
@@ -211,17 +218,32 @@ def check_id_card_duplicate(id_card: str, exclude_id: int = None) -> Optional[La
     Returns:
         Landlord or None: 如果存在则返回房东对象
     """
-    # 直接使用加密后的值查询
-    encrypted_id_card = encrypt_sensitive_data(id_card)
-    if not encrypted_id_card:
-        return None
+    from app.utils.aes_encryption import decrypt_sensitive_data
     
-    query = Landlord.query.filter(Landlord.id_card_encrypted == encrypted_id_card)
-    
+    # 获取所有房东
+    query = Landlord.query
     if exclude_id:
         query = query.filter(Landlord.id != exclude_id)
     
-    return query.first()
+    landlords = query.all()
+    
+    # 遍历比较解密后的身份证号
+    for landlord in landlords:
+        if landlord.id_card_encrypted:
+            try:
+                decrypted = decrypt_sensitive_data(
+                    encrypted_data=landlord.id_card_encrypted,
+                    field_name='id_card',
+                    model_name='Landlord',
+                    record_id=landlord.id,
+                    skip_audit=True
+                )
+                if decrypted == id_card:
+                    return landlord
+            except:
+                continue
+    
+    return None
 
 
 # ============================================================================
@@ -266,19 +288,21 @@ def get_landlords():
     try:
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        page_size = request.args.get('page_size', type=int)
+        per_page_arg = request.args.get('per_page', type=int)
+        per_page = min(page_size or per_page_arg or 20, 100)
         
-        # 构建查询
-        query = Landlord.query
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(Landlord).filter(Landlord.deleted_at.is_(None))
         
-        # 关键词搜索（姓名、手机号、身份证号）
+        # 关键词搜索（姓名、手机号）
+        # 注意：身份证号已加密存储，无法直接搜索
         keyword = request.args.get('keyword')
         if keyword:
             query = query.filter(
                 db.or_(
                     Landlord.name.ilike(f'%{keyword}%'),
-                    Landlord.phone.ilike(f'%{keyword}%'),
-                    Landlord.id_card.ilike(f'%{keyword}%')
+                    Landlord.phone.ilike(f'%{keyword}%')
                 )
             )
         
@@ -291,11 +315,6 @@ def get_landlords():
         phone = request.args.get('phone')
         if phone:
             query = query.filter(Landlord.phone.ilike(f'%{phone}%'))
-        
-        # 身份证号搜索
-        id_card = request.args.get('id_card')
-        if id_card:
-            query = query.filter(Landlord.id_card.ilike(f'%{id_card}%'))
         
         # 状态筛选
         status = request.args.get('status')
@@ -638,10 +657,13 @@ def get_landlord_houses(landlord_id: int):
         
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        per_page = min(
+            int(request.args.get('page_size', request.args.get('per_page', 20))),
+            100
+        )
         
-        # 构建查询
-        query = House.query.filter(House.landlord_id == landlord_id)
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(House).filter(House.landlord_id == landlord_id).filter(House.deleted_at.is_(None))
         
         # 状态筛选
         status = request.args.get('status')
@@ -725,10 +747,13 @@ def get_landlord_contracts(landlord_id: int):
         
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        per_page = min(
+            int(request.args.get('page_size', request.args.get('per_page', 20))),
+            100
+        )
         
-        # 构建查询
-        query = LandlordContract.query.filter(LandlordContract.landlord_id == landlord_id)
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(LandlordContract).filter(LandlordContract.landlord_id == landlord_id).filter(LandlordContract.deleted_at.is_(None))
         
         # 状态筛选
         status = request.args.get('status')
@@ -870,9 +895,12 @@ def search_landlords():
     """
     try:
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        per_page = min(
+            request.args.get('page_size', request.args.get('per_page', 20), type=int),
+            100
+        )
         
-        query = Landlord.query
+        query = db.session.query(Landlord).filter(Landlord.deleted_at.is_(None))
         
         # 姓名搜索
         name = request.args.get('name')
@@ -884,10 +912,7 @@ def search_landlords():
         if phone:
             query = query.filter(Landlord.phone.ilike(f'%{phone}%'))
         
-        # 身份证号搜索
-        id_card = request.args.get('id_card')
-        if id_card:
-            query = query.filter(Landlord.id_card.ilike(f'%{id_card}%'))
+        # 注意：身份证号已加密存储，无法直接搜索
         
         # 状态筛选
         status = request.args.get('status')

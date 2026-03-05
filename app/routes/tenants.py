@@ -43,14 +43,13 @@ def validate_tenant_data(data: Dict, is_update: bool = False) -> tuple:
         else:
             validated_data['name'] = data['name'].strip()
     
-    # 身份证号（必填）
+    # 身份证号（可选）
     if not is_update or 'id_card' in data:
-        if not data.get('id_card'):
-            errors.append('身份证号不能为空')
-        elif len(data.get('id_card', '')) not in [15, 18]:
-            errors.append('身份证号格式不正确')
-        else:
-            validated_data['id_card'] = data['id_card'].strip()
+        if data.get('id_card'):
+            if len(data.get('id_card', '')) not in [15, 18]:
+                errors.append('身份证号格式不正确')
+            else:
+                validated_data['id_card'] = data['id_card'].strip()
     
     # 手机号（必填）
     if not is_update or 'phone' in data:
@@ -88,14 +87,18 @@ def validate_tenant_data(data: Dict, is_update: bool = False) -> tuple:
     
     # 状态（仅在更新时允许）
     if is_update and 'status' in data:
-        if data['status'] not in ['active', 'expired', 'blacklisted']:
-            errors.append('状态必须是 active(在租)、expired(已退租) 或 blacklisted(黑名单)')
+        if data['status'] not in ['pending', 'active', 'expired', 'blacklisted']:
+            errors.append('状态必须是 pending(待租)、active(在租)、expired(已退租) 或 blacklisted(黑名单)')
         else:
             validated_data['status'] = data['status']
     
     # 备注
     if 'remark' in data:
         validated_data['remark'] = data.get('remark', '').strip()
+    
+    # 个人照片
+    if 'photo' in data:
+        validated_data['photo'] = data.get('photo', '').strip()
     
     if errors:
         return False, '; '.join(errors), None
@@ -115,6 +118,9 @@ def format_tenant_response(tenant: Tenant, include_contracts: bool = False) -> D
         dict: 租客响应数据
     """
     data = tenant.to_dict()
+    
+    # 添加身份证号（解密后）
+    data['id_card'] = tenant.get_id_card()
     
     # 添加合同统计
     active_contracts = tenant.get_active_contracts()
@@ -201,19 +207,21 @@ def get_tenants():
     try:
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        page_size = request.args.get('page_size', type=int)
+        per_page_arg = request.args.get('per_page', type=int)
+        per_page = min(page_size or per_page_arg or 20, 100)
         
-        # 构建查询
-        query = Tenant.query
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(Tenant).filter(Tenant.deleted_at.is_(None))
         
-        # 关键词搜索（姓名、手机号、身份证号）
+        # 关键词搜索（姓名、手机号）
+        # 注意：身份证号是加密存储的，无法直接使用 SQL LIKE 查询
         keyword = request.args.get('keyword')
         if keyword:
             query = query.filter(
                 db.or_(
                     Tenant.name.ilike(f'%{keyword}%'),
-                    Tenant.phone.ilike(f'%{keyword}%'),
-                    Tenant.id_card.ilike(f'%{keyword}%')
+                    Tenant.phone.ilike(f'%{keyword}%')
                 )
             )
         
@@ -227,16 +235,15 @@ def get_tenants():
         if phone:
             query = query.filter(Tenant.phone.ilike(f'%{phone}%'))
         
-        # 身份证号搜索
-        id_card = request.args.get('id_card')
-        if id_card:
-            query = query.filter(Tenant.id_card.ilike(f'%{id_card}%'))
+        # 身份证号搜索（由于加密存储，需要在应用层处理）
+        # 如果需要身份证号搜索，可以在这里添加特殊处理逻辑
+        # 目前暂时不支持身份证号的模糊搜索
         
         # 状态筛选
         status = request.args.get('status')
         if status:
-            if status not in ['active', 'expired', 'blacklisted']:
-                return APIResponse.bad_request("状态必须是 active(在租)、expired(已退租) 或 blacklisted(黑名单)")
+            if status not in ['pending', 'active', 'expired', 'blacklisted']:
+                return APIResponse.bad_request("状态必须是 pending(待租)、active(在租)、expired(已退租) 或 blacklisted(黑名单)")
             query = query.filter(Tenant.status == status)
         
         # 排序
@@ -360,10 +367,11 @@ def create_tenant():
         if not is_valid:
             return APIResponse.validation_error(error_msg)
         
-        # 检查身份证号是否重复
-        existing_tenant = check_id_card_duplicate(validated_data['id_card'])
-        if existing_tenant:
-            return APIResponse.bad_request("该身份证号已登记在其他租客名下")
+        # 检查身份证号是否重复（只有提供了身份证号才检查）
+        if validated_data.get('id_card'):
+            existing_tenant = check_id_card_duplicate(validated_data['id_card'])
+            if existing_tenant:
+                return APIResponse.bad_request("该身份证号已登记在其他租客名下")
         
         # 创建租客（排除 id_card 字段，因为模型中没有这个字段）
         tenant_data = {k: v for k, v in validated_data.items() if k != 'id_card'}
@@ -498,7 +506,6 @@ def delete_tenant(tenant_id: int):
             )
         
         tenant_name = tenant.name
-        tenant_id_card = tenant.id_card
         
         # 删除租客
         db.session.delete(tenant)
@@ -615,6 +622,7 @@ def get_tenant_stats():
         total = Tenant.query.count()
         
         # 按状态统计
+        pending = Tenant.query.filter(Tenant.status == 'pending').count()
         active = Tenant.query.filter(Tenant.status == 'active').count()
         expired = Tenant.query.filter(Tenant.status == 'expired').count()
         blacklisted = Tenant.query.filter(Tenant.status == 'blacklisted').count()
@@ -631,6 +639,7 @@ def get_tenant_stats():
         return APIResponse.success({
             'total': total,
             'by_status': {
+                'pending': pending,
                 'active': active,
                 'expired': expired,
                 'blacklisted': blacklisted
@@ -673,9 +682,12 @@ def search_tenants():
     """
     try:
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        per_page = min(
+            request.args.get('page_size', request.args.get('per_page', 20), type=int),
+            100
+        )
         
-        query = Tenant.query
+        query = db.session.query(Tenant).filter(Tenant.deleted_at.is_(None))
         
         # 姓名搜索
         name = request.args.get('name')
@@ -687,14 +699,14 @@ def search_tenants():
         if phone:
             query = query.filter(Tenant.phone.ilike(f'%{phone}%'))
         
-        # 身份证号搜索
-        id_card = request.args.get('id_card')
-        if id_card:
-            query = query.filter(Tenant.id_card.ilike(f'%{id_card}%'))
+        # 身份证号搜索（由于加密存储，暂不支持）
+        # id_card = request.args.get('id_card')
+        # if id_card:
+        #     需要在应用层处理加密身份证号的搜索
         
         # 状态筛选
         status = request.args.get('status')
-        if status and status in ['active', 'expired', 'blacklisted']:
+        if status and status in ['pending', 'active', 'expired', 'blacklisted']:
             query = query.filter(Tenant.status == status)
         
         # 房源地址搜索（通过合同关联）

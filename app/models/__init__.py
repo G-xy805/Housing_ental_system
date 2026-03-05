@@ -11,8 +11,12 @@
 - LandlordContract: 平台与房东合同模型
 - Payment: 支付记录模型（支持滞纳金计算）
 - Media: 多媒体文件模型
+- EncryptionAuditLog: 加密访问审计日志模型
+- SensitiveDataAuditLog: 敏感数据访问审计日志模型
+- BackupRecord: 备份记录模型
+- PasswordHistory: 密码历史记录模型
 """
-from .base import db, BaseModel
+from .base import db, BaseModel, SoftDeleteQuery
 from .user import User
 from .house import House
 from .room import Room
@@ -22,10 +26,16 @@ from .contract import Contract
 from .landlord_contract import LandlordContract
 from .payment import Payment
 from .media import Media
+from .encryption_audit import EncryptionAuditLog
+from .sensitive_data_audit import SensitiveDataAuditLog
+from .backup_record import BackupRecord
+from .backup_settings import BackupSettings
+from .password_history import PasswordHistory
 
 __all__ = [
     'db',
     'BaseModel',
+    'SoftDeleteQuery',
     'User',
     'House',
     'Room',
@@ -34,5 +44,9 @@ __all__ = [
     'Contract',
     'LandlordContract',
     'Payment',
-    'Media'
+    'Media',
+    'EncryptionAuditLog',
+    'SensitiveDataAuditLog',
+    'BackupRecord',
+    'PasswordHistory'
 ]

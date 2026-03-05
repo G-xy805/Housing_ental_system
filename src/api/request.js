@@ -6,10 +6,7 @@ import router from '@/router'
 // 创建 axios 实例
 const request = axios.create({
   baseURL: '/api',
-  timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json'
-  }
+  timeout: 30000
 })
 
 // 请求拦截器
@@ -22,6 +19,11 @@ request.interceptors.request.use(
       config.headers.Authorization = `Bearer ${userStore.token}`
     }
     
+    // 设置默认 Content-Type 为 JSON，除非是 FormData
+    if (!config.headers['Content-Type'] && !(config.data instanceof FormData)) {
+      config.headers['Content-Type'] = 'application/json'
+    }
+    
     // 添加请求时间戳（可选，用于防止缓存）
     if (config.method === 'get') {
       config.params = {
@@ -31,9 +33,10 @@ request.interceptors.request.use(
     }
     
     // 调试：打印 PUT 请求的数据
-    if (config.method === 'put' && config.url.includes('/houses/')) {
+    if (config.method === 'put' && (config.url.includes('/houses/') || config.url.includes('/payments/'))) {
       console.log('发送 PUT 请求:', config.url)
       console.log('请求数据:', config.data)
+      console.log('请求头:', config.headers)
     }
     
     return config
@@ -57,7 +60,11 @@ request.interceptors.response.use(
     
     // 根据后端返回的状态码判断（这里假设成功状态码为 200 或 0）
     // 如果后端直接返回数据，没有 code 字段，也视为成功
-    if (res.code === undefined || res.code === 200 || res.code === 0 || res.success === true) {
+    // 特殊处理：如果有 success 字段，不管值是什么，都返回原始响应，让前端自己处理
+    if (res.success !== undefined) {
+      return res
+    }
+    if (res.code === undefined || res.code === 200 || res.code === 0) {
       return res
     }
     
@@ -96,8 +103,34 @@ request.interceptors.response.use(
     if (error.response) {
       const { status, data } = error.response
       
+      // 打印详细错误信息
+      console.error('响应错误详情:', {
+        status,
+        data,
+        error: data?.error,
+        message: data?.message
+      })
+      
       // 获取错误信息
-      const errorMsg = data?.message || getHttpErrorMessage(status)
+      let errorMsg = data?.message || getHttpErrorMessage(status)
+      
+      // 处理422错误的详细信息
+      if (status === 422 && data?.error) {
+        if (typeof data.error === 'string') {
+          errorMsg = data.error
+        } else if (typeof data.error === 'object') {
+          // 提取错误对象中的信息
+          const errorMessages = []
+          for (const [key, value] of Object.entries(data.error)) {
+            if (Array.isArray(value)) {
+              errorMessages.push(`${key}: ${value.join(', ')}`)
+            } else {
+              errorMessages.push(`${key}: ${value}`)
+            }
+          }
+          errorMsg = errorMessages.join('; ')
+        }
+      }
       
       switch (status) {
         case 400:

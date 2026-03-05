@@ -611,7 +611,7 @@ const handleSubmitRestore = async () => {
     // 开始恢复
     const restorePromise = restoreBackup({
       filename: currentBackup.value.filename,
-      backup_type: currentBackup.value.backup_type
+      confirm: true
     })
 
     await Promise.all([

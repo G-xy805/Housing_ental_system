@@ -52,7 +52,7 @@ class Media(BaseModel):
     )
     
     # 关系
-    uploader = db.relationship('User', foreign_keys=[uploaded_by])
+    uploader = db.relationship('User', foreign_keys=[uploaded_by], overlaps='uploaded_media')
     
     # 允许的 MIME 类型映射
     ALLOWED_MIME_TYPES = {

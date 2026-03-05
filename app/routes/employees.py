@@ -35,42 +35,51 @@ def validate_employee_data(data: Dict, is_update: bool = False) -> tuple:
     
     # 姓名（必填）
     if not is_update or 'name' in data:
-        if not data.get('name'):
+        name_value = data.get('name')
+        if not name_value:
             errors.append('姓名不能为空')
-        elif len(data.get('name', '')) > 50:
+        elif len(str(name_value)) > 50:
             errors.append('姓名不能超过 50 个字符')
         else:
-            validated_data['name'] = data['name'].strip()
-    
+            validated_data['name'] = str(name_value).strip()
+
     # 手机号（必填）
     if not is_update or 'phone' in data:
-        if not data.get('phone'):
+        phone_value = data.get('phone')
+        if not phone_value:
             errors.append('手机号不能为空')
-        elif len(data.get('phone', '')) > 20:
+        elif len(str(phone_value)) > 20:
             errors.append('手机号格式不正确')
         else:
-            validated_data['phone'] = data['phone'].strip()
+            validated_data['phone'] = str(phone_value).strip()
     
     # 邮箱（可选）
     if 'email' in data and data.get('email'):
-        if '@' not in data.get('email', ''):
+        email_value = data.get('email')
+        if '@' not in str(email_value):
             errors.append('邮箱格式不正确')
         else:
-            validated_data['email'] = data['email'].strip()
-    else:
-        # 如果没有提供邮箱，设置为 None
+            validated_data['email'] = str(email_value).strip()
+    elif not is_update:
+        # 如果没有提供邮箱，设置为 None（仅创建时）
         validated_data['email'] = None
-    
+    # 更新操作时，如果没有提供邮箱，不修改邮箱字段
+
     # 身份证号（可选）
     if 'id_card' in data and data.get('id_card'):
-        if len(data.get('id_card', '')) not in [15, 18]:
+        id_card_value = data.get('id_card')
+        if len(str(id_card_value)) not in [15, 18]:
             errors.append('身份证号格式不正确')
         else:
-            validated_data['id_card'] = data['id_card'].strip()
-    
+            validated_data['id_card'] = str(id_card_value).strip()
+
     # 职位（可选）
     if 'position' in data:
-        validated_data['position'] = data.get('position', '').strip()
+        position_value = data.get('position')
+        if position_value is not None:
+            validated_data['position'] = str(position_value).strip()
+        else:
+            validated_data['position'] = None
     
     # 用户名（注册时必填）
     if not is_update:
@@ -103,6 +112,14 @@ def validate_employee_data(data: Dict, is_update: bool = False) -> tuple:
             errors.append('状态必须是 active(在职)、resigned(离职) 或 disabled(禁用)')
         else:
             validated_data['status'] = data['status']
+    
+    # 头像（可选）
+    if 'avatar' in data:
+        avatar_value = data.get('avatar')
+        if avatar_value is not None:
+            validated_data['avatar'] = str(avatar_value).strip()
+        else:
+            validated_data['avatar'] = None
     
     if errors:
         return False, '; '.join(errors), None
@@ -175,6 +192,25 @@ def check_username_duplicate(username: str, exclude_id: int = None) -> Optional[
     return query.first()
 
 
+def check_id_card_duplicate(id_card: str, exclude_id: int = None) -> Optional[User]:
+    """
+    检查身份证号是否已存在
+    
+    Args:
+        id_card: 身份证号
+        exclude_id: 排除的用户 ID（更新时使用）
+        
+    Returns:
+        User or None: 如果存在则返回用户对象
+    """
+    import hashlib
+    id_card_hash = hashlib.sha256(id_card.encode()).hexdigest()
+    query = User.query.filter_by(id_card_hash=id_card_hash)
+    if exclude_id:
+        query = query.filter(User.id != exclude_id)
+    return query.first()
+
+
 # ============================================================================
 # 员工 CRUD 接口
 # ============================================================================
@@ -216,10 +252,12 @@ def get_employees():
     try:
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        page_size = request.args.get('page_size', type=int)
+        per_page_arg = request.args.get('per_page', type=int)
+        per_page = min(page_size or per_page_arg or 20, 100)
         
-        # 构建查询
-        query = User.query
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(User).filter(User.deleted_at.is_(None))
         
         # 关键词搜索（姓名、手机号、邮箱）
         keyword = request.args.get('keyword')
@@ -387,6 +425,11 @@ def create_employee():
         if 'email' in validated_data and check_email_duplicate(validated_data['email']):
             return APIResponse.bad_request("邮箱已存在")
         
+        # 检查身份证号是否重复
+        if 'id_card' in validated_data and validated_data['id_card']:
+            if check_id_card_duplicate(validated_data['id_card']):
+                return APIResponse.bad_request("身份证号已存在")
+        
         # 如果没有提供邮箱，生成一个基于用户名的邮箱
         if 'email' not in validated_data or not validated_data['email']:
             validated_data['email'] = f"{validated_data['username']}@example.com"
@@ -399,17 +442,18 @@ def create_employee():
         
         # 创建员工
         user = User(**validated_data)
-        
-        # 设置密码
+
+        # 设置创建人
+        user.created_by = getattr(g, 'user_id', None)
+
+        # 先设置密码（这样 password_hash 就不会是 None）
         user.set_password(password)
-        
+
         # 设置身份证号
         if id_card:
             user.set_id_card(id_card)
-        
-        # 设置创建人
-        user.created_by = getattr(g, 'user_id', None)
-        
+
+        # 添加到数据库并提交
         db.session.add(user)
         db.session.commit()
         
@@ -488,6 +532,11 @@ def update_employee(employee_id: int):
         if 'email' in validated_data and check_email_duplicate(validated_data['email'], exclude_id=employee_id):
             return APIResponse.bad_request("邮箱已存在")
         
+        # 检查身份证号是否重复（排除自己）
+        if 'id_card' in validated_data and validated_data['id_card']:
+            if check_id_card_duplicate(validated_data['id_card'], exclude_id=employee_id):
+                return APIResponse.bad_request("身份证号已存在")
+        
         # 更新员工信息
         for key, value in validated_data.items():
             if key == 'id_card' and value:
@@ -535,13 +584,13 @@ def delete_employee(employee_id: int):
         if not user:
             return APIResponse.not_found("员工不存在")
         
+        # 不允许删除自己（优先检查）
+        if user.id == g.user_id:
+            return APIResponse.bad_request("不允许删除自己的账号")
+        
         # 不允许删除管理员
         if user.role == 'admin':
             return APIResponse.bad_request("不允许删除管理员账号")
-        
-        # 不允许删除自己
-        if user.id == g.user_id:
-            return APIResponse.bad_request("不允许删除自己的账号")
         
         employee_name = user.name
         

@@ -202,6 +202,8 @@ const handleLogin = async () => {
           localStorage.removeItem('rememberMe')
         }
         
+        await userStore.fetchCurrentUser()
+        
         ElMessage.success('登录成功')
         
         const redirect = route.query.redirect || '/dashboard'

@@ -55,6 +55,16 @@ export function getTenantStats() {
 }
 
 /**
+ * 搜索租客
+ * @param {Object} params 查询参数
+ * @param {string} params.q 搜索关键词（姓名/电话）
+ * @returns {Promise}
+ */
+export function searchTenants(params) {
+  return request.get('/tenants/search', { params })
+}
+
+/**
  * 获取租客合同列表
  * @param {number} id 租客 ID
  * @returns {Promise}

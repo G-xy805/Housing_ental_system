@@ -27,7 +27,7 @@
             class="expiring-tag"
             @click="handleView(contract)"
           >
-            {{ contract.contract_no }} - {{ contract.landlord_name }} - 剩余 {{ contract.days_until_expiry }} 天到期
+            {{ contract.contract_no }} - {{ contract.landlord?.name || '-' }} - 剩余 {{ contract.days_until_expiry }} 天到期
           </el-tag>
         </div>
       </template>
@@ -80,16 +80,24 @@
         v-loading="loading"
         @sort-change="handleSortChange"
       >
-        <el-table-column prop="contract_no" label="合同编号" min-width="120" sortable />
-        <el-table-column prop="title" label="合同标题" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="landlord_name" label="房东姓名" min-width="100" />
-        <el-table-column prop="property_count" label="房源数" width="80" align="center" />
-        <el-table-column prop="contract_amount" label="合同金额 (元)" width="120" sortable>
+        <el-table-column prop="contract_no" label="合同编号" min-width="160" sortable />
+        <el-table-column prop="title" label="合同标题" min-width="140" show-overflow-tooltip />
+        <el-table-column label="房东姓名" width="90">
+          <template #default="scope">
+            {{ scope.row.landlord?.name || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="房源数" width="70" align="center">
+          <template #default="scope">
+            {{ scope.row.house_ids?.length || 0 }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="contract_amount" label="合同金额 (元)" width="110" sortable>
           <template #default="scope">
             <span>¥{{ scope.row.contract_amount }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="合同期限" min-width="150">
+        <el-table-column label="合同期限" min-width="200">
           <template #default="scope">
             <div class="contract-period">
               <span>{{ formatChineseDate(scope.row.start_date) }}</span>
@@ -98,7 +106,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="status" label="状态" width="90">
           <template #default="scope">
             <el-tag :type="getStatusType(scope.row.status)">
               {{ getStatusText(scope.row.status) }}
@@ -201,13 +209,13 @@
           {{ currentContract.title }}
         </el-descriptions-item>
         <el-descriptions-item label="房东姓名">
-          {{ currentContract.landlord_name }}
+          {{ currentContract.landlord?.name || '-' }}
         </el-descriptions-item>
         <el-descriptions-item label="房东电话">
-          {{ currentContract.landlord_phone || '-' }}
+          {{ currentContract.landlord?.phone || '-' }}
         </el-descriptions-item>
         <el-descriptions-item label="房源数量">
-          {{ currentContract.property_count || '-' }}
+          {{ currentContract.house_ids?.length || 0 }}
         </el-descriptions-item>
         <el-descriptions-item label="合同金额">
           <span class="money">¥{{ currentContract.contract_amount }}</span>
@@ -440,7 +448,7 @@
         style="margin-bottom: 20px"
       >
         即将终止合同 <strong>{{ currentContract.contract_no }}</strong>，
-        房东：{{ currentContract.landlord_name }}，此操作不可恢复！
+        房东：{{ currentContract.landlord?.name || '-' }}，此操作不可恢复！
       </el-alert>
       <el-form
         ref="terminateFormRef"
@@ -512,7 +520,7 @@
         style="margin-bottom: 20px"
       >
         即将为合同 <strong>{{ currentContract.contract_no }}</strong> 办理续签，
-        房东：{{ currentContract.landlord_name }}
+        房东：{{ currentContract.landlord?.name || '-' }}
       </el-alert>
       <el-form
         ref="renewFormRef"
@@ -780,12 +788,12 @@ const getPaymentCycleText = (cycle) => {
   return texts[cycle] || `${cycle}个月`
 }
 
-// 格式化中文日期
+// 格式化日期为 YYYY-MM-DD
 const formatChineseDate = (dateStr) => {
   if (!dateStr) return '-'
   try {
     const date = dayjs(dateStr)
-    return date.format('YYYY 年 M 月 D 日')
+    return date.format('YYYY-MM-DD')
   } catch (error) {
     return dateStr
   }

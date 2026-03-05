@@ -46,7 +46,7 @@
             <!-- 单级菜单 -->
             <el-menu-item
               v-if="!route.children && !(route.meta && route.meta.hidden)"
-              :index="route.path"
+              :index="'/' + route.path"
               class="menu-item"
             >
               <el-icon class="menu-icon">
@@ -60,7 +60,7 @@
             <!-- 多级菜单 -->
             <el-sub-menu 
               v-else-if="route.children && route.children.length > 0" 
-              :index="route.path"
+              :index="'/' + route.path"
               class="sub-menu"
             >
               <template #title>
@@ -72,7 +72,7 @@
               <template v-for="child in route.children" :key="child.path">
                 <el-menu-item
                   v-if="!(child.meta && child.meta.hidden)"
-                  :index="child.path"
+                  :index="'/' + child.path"
                   class="sub-menu-item"
                 >
                   <span class="menu-title">{{ child.meta && child.meta.title || '' }}</span>
@@ -160,10 +160,6 @@
                   <el-icon><User /></el-icon>
                   <span>个人中心</span>
                 </el-dropdown-item>
-                <el-dropdown-item command="settings">
-                  <el-icon><Setting /></el-icon>
-                  <span>账号设置</span>
-                </el-dropdown-item>
                 <el-dropdown-item divided command="logout">
                   <el-icon class="logout-icon"><SwitchButton /></el-icon>
                   <span>退出登录</span>
@@ -205,7 +201,6 @@ import {
   Bell,
   ArrowDown,
   User,
-  Setting,
   SwitchButton,
   Odometer,
   Document,
@@ -308,9 +303,6 @@ const handleNotification = () => {
 const handleCommand = (command) => {
   switch (command) {
     case 'profile':
-      router.push('/profile')
-      break
-    case 'settings':
       router.push('/profile')
       break
     case 'logout':

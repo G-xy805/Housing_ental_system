@@ -94,3 +94,13 @@ export function getLandlordContracts(landlordId, params) {
 export function getLandlordStats() {
   return request.get('/landlords/stats')
 }
+
+/**
+ * 搜索房东
+ * @param {Object} params 查询参数
+ * @param {string} params.q 搜索关键词（姓名/电话）
+ * @returns {Promise}
+ */
+export function searchLandlords(params) {
+  return request.get('/landlords/search', { params })
+}

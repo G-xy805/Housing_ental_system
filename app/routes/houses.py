@@ -14,6 +14,16 @@ from app.models.media import Media
 from app.models import db
 from app.utils.decorators import login_required, admin_required, permission_required
 from app.utils.responses import APIResponse, PaginationResponse
+from app.utils.redis_cache import (
+    get_cache_manager, 
+    invalidate_cache_pattern, 
+    CacheEventEmitter,
+    generate_cache_key
+)
+from app.utils.query_optimizer import (
+    optimize_house_query,
+    optimize_house_detail_query
+)
 
 # 创建蓝图
 houses_bp = Blueprint('houses', __name__, url_prefix='/api/houses')
@@ -307,12 +317,42 @@ def get_houses():
         
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        page_size = request.args.get('page_size', type=int)
+        per_page_arg = request.args.get('per_page', type=int)
+        per_page = min(page_size or per_page_arg or 20, 100)
         
         current_app.logger.info(f"分页参数：page={page}, per_page={per_page}")
         
-        # 构建查询
-        query = House.query
+        # 尝试从缓存获取数据
+        cache_manager = get_cache_manager()
+        cache_key_params = {
+            'page': page,
+            'per_page': per_page,
+            'city': request.args.get('city', ''),
+            'district': request.args.get('district', ''),
+            'status': request.args.get('status', ''),
+            'rental_type': request.args.get('rental_type') or request.args.get('type', ''),
+            'min_price': request.args.get('min_price', ''),
+            'max_price': request.args.get('max_price', ''),
+            'keyword': request.args.get('keyword', ''),
+            'owner_id': request.args.get('owner_id', ''),
+            'order_by': request.args.get('order_by', 'created_at'),
+            'order': request.args.get('order', 'desc')
+        }
+        
+        # 生成缓存键
+        cache_key_suffix = generate_cache_key(**cache_key_params)
+        key_prefix = current_app.config.get('CACHE_KEY_PREFIX', 'housing_rental:')
+        cache_key = f"{key_prefix}houses:list:{cache_key_suffix}"
+        
+        # 尝试从缓存获取
+        cached_result = cache_manager.get(cache_key)
+        if cached_result is not None:
+            current_app.logger.info(f"从缓存获取房源列表数据: {cache_key}")
+            return APIResponse.success(cached_result, "获取房源列表成功（缓存）")
+        
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(House).filter(House.deleted_at.is_(None))
         
         # 城市筛选
         city = request.args.get('city')
@@ -386,10 +426,16 @@ def get_houses():
             'prev_num': pagination.prev_num if pagination.has_prev else None
         }
         
-        return APIResponse.success({
+        result = {
             'items': items,
             'pagination': pagination_info
-        }, "获取房源列表成功")
+        }
+        
+        # 缓存结果（缓存 5 分钟）
+        cache_manager.set(cache_key, result, timeout=300)
+        current_app.logger.info(f"房源列表数据已缓存: {cache_key}")
+        
+        return APIResponse.success(result, "获取房源列表成功")
         
     except Exception as e:
         current_app.logger.error(f"获取房源列表失败：{str(e)}")
@@ -425,7 +471,8 @@ def get_house(house_id: int):
         }
     """
     try:
-        house = House.query.get(house_id)
+        # 使用 eager loading 优化查询，避免 N+1 问题
+        house = optimize_house_detail_query(House.query).filter_by(id=house_id).first()
         
         if not house:
             return APIResponse.not_found("房源不存在")
@@ -546,6 +593,9 @@ def create_house():
         # 刷新获取完整数据
         db.session.refresh(house)
         
+        # 失效房源列表缓存
+        CacheEventEmitter.emit('house_created')
+        
         # 格式化响应
         result = format_house_response(house)
         
@@ -665,6 +715,9 @@ def update_house(house_id: int):
         # 刷新获取完整数据
         db.session.refresh(house)
         
+        # 失效房源缓存
+        CacheEventEmitter.emit('house_updated')
+        
         # 格式化响应
         result = format_house_response(house, include_rooms=True)
         
@@ -718,6 +771,9 @@ def delete_house(house_id: int):
         house_title = house.title
         db.session.delete(house)
         db.session.commit()
+        
+        # 失效房源缓存
+        CacheEventEmitter.emit('house_deleted')
         
         current_app.logger.info(f"管理员 {g.username} 删除了房源 {house_id}: {house_title}")
         

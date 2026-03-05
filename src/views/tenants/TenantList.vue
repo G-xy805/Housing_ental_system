@@ -27,6 +27,19 @@
       <el-col :span="6">
         <el-card class="stat-card">
           <div class="stat-content">
+            <div class="stat-icon pending">
+              <el-icon :size="32"><Clock /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ statistics.pending || 0 }}</div>
+              <div class="stat-label">待租租客</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card class="stat-card">
+          <div class="stat-content">
             <div class="stat-icon active">
               <el-icon :size="32"><CircleCheck /></el-icon>
             </div>
@@ -50,6 +63,8 @@
           </div>
         </el-card>
       </el-col>
+    </el-row>
+    <el-row :gutter="20" style="margin-top: 20px;">
       <el-col :span="6">
         <el-card class="stat-card">
           <div class="stat-content">
@@ -78,6 +93,7 @@
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="searchForm.status" placeholder="全部状态" clearable>
+            <el-option label="待租" value="pending" />
             <el-option label="在租" value="active" />
             <el-option label="已退租" value="expired" />
             <el-option label="黑名单" value="blacklisted" />
@@ -128,6 +144,9 @@
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
+                  <el-dropdown-item command="pending" :disabled="row.status === 'pending'">
+                    设为待租
+                  </el-dropdown-item>
                   <el-dropdown-item command="active" :disabled="row.status === 'active'">
                     设为在租
                   </el-dropdown-item>
@@ -182,6 +201,33 @@
           <el-col :span="12">
             <el-form-item label="身份证号" prop="id_card">
               <el-input v-model="tenantForm.id_card" placeholder="请输入身份证号" maxlength="18" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="24">
+            <el-form-item label="个人照片" prop="photo">
+              <el-upload
+                class="avatar-uploader"
+                action="#"
+                :http-request="handlePhotoUpload"
+                :show-file-list="false"
+                :before-upload="beforePhotoUpload"
+                accept="image/*"
+              >
+                <img v-if="tenantForm.photo" :src="tenantForm.photo" class="avatar" />
+                <el-icon v-else class="avatar-uploader-icon"><Plus /></el-icon>
+              </el-upload>
+              <el-button 
+                v-if="tenantForm.photo" 
+                type="danger" 
+                size="small" 
+                @click="handlePhotoDelete"
+                style="margin-top: 10px"
+              >
+                删除照片
+              </el-button>
             </el-form-item>
           </el-col>
         </el-row>
@@ -253,38 +299,41 @@
       width="800px"
       destroy-on-close
     >
+      <div class="tenant-header">
+        <div class="tenant-photo">
+          <el-avatar 
+            v-if="currentTenant.photo" 
+            :src="currentTenant.photo" 
+            :size="100"
+            fit="cover"
+          />
+          <el-avatar v-else :size="100" class="avatar-placeholder">
+            {{ currentTenant.name?.charAt(0) || '?' }}
+          </el-avatar>
+        </div>
+        <div class="tenant-basic">
+          <h3 class="tenant-name">{{ currentTenant.name }}</h3>
+          <el-tag :type="getStatusType(currentTenant.status)" style="margin-top: 8px;">
+            {{ getStatusText(currentTenant.status) }}
+          </el-tag>
+        </div>
+      </div>
+      
       <el-descriptions :column="2" border>
-        <el-descriptions-item label="姓名">
-          {{ currentTenant.name }}
-        </el-descriptions-item>
         <el-descriptions-item label="身份证号">
-          {{ currentTenant.id_card }}
+          {{ maskIdCard(currentTenant.id_card) }}
         </el-descriptions-item>
         <el-descriptions-item label="手机号">
-          {{ currentTenant.phone }}
+          {{ currentTenant.phone || '-' }}
         </el-descriptions-item>
         <el-descriptions-item label="邮箱">
           {{ currentTenant.email || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="紧急联系人">
-          {{ currentTenant.emergency_contact || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="紧急联系电话">
-          {{ currentTenant.emergency_phone || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="与联系人关系">
-          {{ currentTenant.emergency_relation || '-' }}
         </el-descriptions-item>
         <el-descriptions-item label="职业">
           {{ currentTenant.occupation || '-' }}
         </el-descriptions-item>
         <el-descriptions-item label="工作单位">
           {{ currentTenant.company || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag :type="getStatusType(currentTenant.status)">
-            {{ getStatusText(currentTenant.status) }}
-          </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="合同数">
           <el-link type="primary" @click="handleViewContracts(currentTenant)">
@@ -294,7 +343,22 @@
         <el-descriptions-item label="创建时间">
           {{ formatDate(currentTenant.created_at) }}
         </el-descriptions-item>
-        <el-descriptions-item label="备注" :span="2">
+      </el-descriptions>
+      
+      <el-descriptions title="紧急联系人信息" :column="2" border style="margin-top: 20px;">
+        <el-descriptions-item label="紧急联系人">
+          {{ currentTenant.emergency_contact || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="紧急联系电话">
+          {{ currentTenant.emergency_phone || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="与联系人关系">
+          {{ currentTenant.emergency_relation || '-' }}
+        </el-descriptions-item>
+      </el-descriptions>
+      
+      <el-descriptions style="margin-top: 20px;" :column="1" border>
+        <el-descriptions-item label="备注">
           {{ currentTenant.remark || '-' }}
         </el-descriptions-item>
       </el-descriptions>
@@ -337,9 +401,10 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, Refresh, User, CircleCheck, CircleClose, Warning, ArrowDown } from '@element-plus/icons-vue'
+import { Plus, Search, Refresh, User, CircleCheck, CircleClose, Warning, ArrowDown, Clock } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { getTenantList, getTenantDetail, createTenant, updateTenant, deleteTenant, getTenantStats, getTenantContracts } from '@/api/tenant'
+import { uploadImage } from '@/api/upload'
 
 const loading = ref(false)
 const tenantList = ref([])
@@ -355,6 +420,7 @@ const tenantContracts = ref([])
 
 const statistics = reactive({
   total: 0,
+  pending: 0,
   active: 0,
   expired: 0,
   blacklisted: 0
@@ -381,13 +447,13 @@ const tenantForm = reactive({
   emergency_relation: '',
   occupation: '',
   company: '',
-  remark: ''
+  remark: '',
+  photo: ''
 })
 
 const formRules = {
   name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   id_card: [
-    { required: true, message: '请输入身份证号', trigger: 'blur' },
     { pattern: /(^\d{15}$)|(^\d{18}$)|(^\d{17}(\d|X|x)$)/, message: '请输入正确的身份证号', trigger: 'blur' }
   ],
   phone: [
@@ -397,16 +463,16 @@ const formRules = {
   email: [
     { type: 'email', message: '请输入正确的邮箱地址', trigger: 'blur' }
   ],
-  emergency_contact: [{ required: true, message: '请输入紧急联系人', trigger: 'blur' }],
+  emergency_contact: [],
   emergency_phone: [
-    { required: true, message: '请输入紧急联系电话', trigger: 'blur' },
     { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }
   ],
-  emergency_relation: [{ required: true, message: '请输入与联系人关系', trigger: 'blur' }]
+  emergency_relation: []
 }
 
 const getStatusType = (status) => {
   const types = {
+    pending: 'warning',
     active: 'success',
     expired: 'info',
     blacklisted: 'danger'
@@ -416,6 +482,7 @@ const getStatusType = (status) => {
 
 const getStatusText = (status) => {
   const texts = {
+    pending: '待租',
     active: '在租',
     expired: '已退租',
     blacklisted: '黑名单'
@@ -455,6 +522,7 @@ const fetchStatistics = async () => {
     const res = await getTenantStats()
     const data = res.data
     statistics.total = data.total || 0
+    statistics.pending = data.by_status?.pending || 0
     statistics.active = data.by_status?.active || 0
     statistics.expired = data.by_status?.expired || 0
     statistics.blacklisted = data.by_status?.blacklisted || 0
@@ -513,7 +581,8 @@ const resetForm = () => {
     emergency_relation: '',
     occupation: '',
     company: '',
-    remark: ''
+    remark: '',
+    photo: ''
   })
 }
 
@@ -548,7 +617,8 @@ const handleEdit = (row) => {
     emergency_relation: row.emergency_relation || '',
     occupation: row.occupation || '',
     company: row.company || '',
-    remark: row.remark || ''
+    remark: row.remark || '',
+    photo: row.photo || ''
   })
   dialogVisible.value = true
 }
@@ -587,6 +657,7 @@ const handleSubmit = async () => {
 
 const handleChangeStatus = async (status, row) => {
   const statusTexts = {
+    pending: '待租',
     active: '在租',
     expired: '已退租',
     blacklisted: '黑名单'
@@ -643,6 +714,43 @@ const handleViewContracts = async (row) => {
   }
 }
 
+// 照片上传前验证
+const beforePhotoUpload = (file) => {
+  const isJPG = file.type === 'image/jpeg' || file.type === 'image/png' || file.type === 'image/webp'
+  const isLt2M = file.size / 1024 / 1024 < 2
+
+  if (!isJPG) {
+    ElMessage.error('只能上传 JPG、PNG 或 WebP 格式的图片!')
+    return false
+  }
+  if (!isLt2M) {
+    ElMessage.error('图片大小不能超过 2MB!')
+    return false
+  }
+  return true
+}
+
+// 处理照片上传
+const handlePhotoUpload = async (options) => {
+  const { file, onSuccess, onError } = options
+  try {
+    const response = await uploadImage(file)
+    tenantForm.photo = response.data.files?.[0]?.file_url
+    ElMessage.success('照片上传成功')
+    onSuccess(response)
+  } catch (error) {
+    console.error('照片上传失败:', error)
+    ElMessage.error('照片上传失败，请重试')
+    onError(error)
+  }
+}
+
+// 处理照片删除
+const handlePhotoDelete = () => {
+  tenantForm.photo = ''
+  ElMessage.success('照片已删除')
+}
+
 onMounted(() => {
   loadTenantList()
   fetchStatistics()
@@ -667,6 +775,34 @@ onMounted(() => {
     }
   }
   
+  .tenant-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 20px;
+    padding: 20px;
+    background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    border-radius: 8px;
+    
+    .tenant-photo {
+      .avatar-placeholder {
+        background-color: rgba(255, 255, 255, 0.2);
+        color: #fff;
+        font-size: 36px;
+        font-weight: bold;
+      }
+    }
+    
+    .tenant-basic {
+      .tenant-name {
+        margin: 0;
+        font-size: 24px;
+        font-weight: bold;
+        color: #fff;
+      }
+    }
+  }
+  
   .statistics-row {
     margin-bottom: 20px;
     
@@ -687,6 +823,10 @@ onMounted(() => {
           
           &.total {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          }
+          
+          &.pending {
+            background: linear-gradient(135deg, #f6d365 0%, #fda085 100%);
           }
           
           &.active {
@@ -738,6 +878,37 @@ onMounted(() => {
       margin-top: 20px;
       display: flex;
       justify-content: flex-end;
+    }
+  }
+
+  .avatar-uploader {
+    border: 1px dashed #d9d9d9;
+    border-radius: 6px;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s;
+    
+    &:hover {
+      border-color: #409eff;
+    }
+
+    .avatar {
+      width: 120px;
+      height: 120px;
+      display: block;
+      object-fit: cover;
+    }
+
+    .avatar-uploader-icon {
+      font-size: 28px;
+      color: #909399;
+      width: 120px;
+      height: 120px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #f5f7fa;
     }
   }
 }

@@ -18,8 +18,39 @@
             v-model="formData.id_card" 
             placeholder="请输入 18 位身份证号" 
             maxlength="18"
+            :disabled="isEdit"
             @input="handleIdCardInput"
           />
+          <div v-if="isEdit" class="form-item-tip">
+            身份证号不可修改，如需变更请联系管理员
+          </div>
+        </el-form-item>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="20">
+      <el-col :span="24">
+        <el-form-item label="个人照片" prop="photo">
+          <el-upload
+            class="avatar-uploader"
+            action="#"
+            :http-request="handlePhotoUpload"
+            :show-file-list="false"
+            :before-upload="beforePhotoUpload"
+            accept="image/*"
+          >
+            <img v-if="formData.photo" :src="formData.photo" class="avatar" />
+            <el-icon v-else class="avatar-uploader-icon"><Plus /></el-icon>
+          </el-upload>
+          <el-button 
+            v-if="formData.photo" 
+            type="danger" 
+            size="small" 
+            @click="handlePhotoDelete"
+            style="margin-top: 10px"
+          >
+            删除照片
+          </el-button>
         </el-form-item>
       </el-col>
     </el-row>
@@ -112,8 +143,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, computed } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
+import { uploadImage } from '@/api/upload'
 
 const props = defineProps({
   modelValue: {
@@ -153,22 +186,32 @@ const defaultFormData = {
   property_cert_no: '',
   address: '',
   status: 'active',
-  remark: ''
+  remark: '',
+  photo: ''
 }
 
 const formData = reactive({ ...defaultFormData })
 
-// 表单验证规则
-const formRules = {
+// 表单验证规则（动态生成，编辑模式下身份证号不必填）
+const formRules = computed(() => ({
   name: [
     { required: true, message: '请输入房东姓名', trigger: 'blur' },
     { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
   ],
   id_card: [
-    { required: true, message: '请输入身份证号', trigger: 'blur' },
+    { required: !props.isEdit, message: '请输入身份证号', trigger: 'blur' },
     {
       validator: (rule, value, callback) => {
+        // 编辑模式下，如果值为脱敏格式（包含*），跳过验证
+        if (props.isEdit && value && value.includes('*')) {
+          callback()
+          return
+        }
         if (!value) {
+          if (props.isEdit) {
+            callback()
+            return
+          }
           callback(new Error('请输入身份证号'))
           return
         }
@@ -214,7 +257,7 @@ const formRules = {
       trigger: 'blur'
     }
   ]
-}
+}))
 
 // 身份证号输入处理（自动转大写 X）
 const handleIdCardInput = (value) => {
@@ -264,17 +307,23 @@ const handleSubmit = async () => {
     // 准备提交数据
     const submitData = {
       name: formData.name,
-      id_card: formData.id_card,
       phone: formData.phone,
       bank_card: formData.bank_card || undefined,
       bank_name: formData.bank_name || undefined,
       property_cert_no: formData.property_cert_no || undefined,
       address: formData.address || undefined,
-      remark: formData.remark || undefined
+      remark: formData.remark || undefined,
+      photo: formData.photo || undefined
     }
 
-    // 如果是编辑模式，添加状态字段
+    // 新增模式才提交身份证号
+    if (!props.isEdit) {
+      submitData.id_card = formData.id_card
+    }
+
+    // 如果是编辑模式，添加 id 和状态字段
     if (props.isEdit) {
+      submitData.id = formData.id
       submitData.status = formData.status
     }
     
@@ -301,6 +350,43 @@ const handleCancel = () => {
 // 删除
 const handleDelete = () => {
   emit('delete', formData)
+}
+
+// 照片上传前验证
+const beforePhotoUpload = (file) => {
+  const isJPG = file.type === 'image/jpeg' || file.type === 'image/png' || file.type === 'image/webp'
+  const isLt2M = file.size / 1024 / 1024 < 2
+
+  if (!isJPG) {
+    ElMessage.error('只能上传 JPG、PNG 或 WebP 格式的图片!')
+    return false
+  }
+  if (!isLt2M) {
+    ElMessage.error('图片大小不能超过 2MB!')
+    return false
+  }
+  return true
+}
+
+// 处理照片上传
+const handlePhotoUpload = async (options) => {
+  const { file, onSuccess, onError } = options
+  try {
+    const response = await uploadImage(file)
+    formData.photo = response.data.files?.[0]?.file_url
+    ElMessage.success('照片上传成功')
+    onSuccess(response)
+  } catch (error) {
+    console.error('照片上传失败:', error)
+    ElMessage.error('照片上传失败，请重试')
+    onError(error)
+  }
+}
+
+// 处理照片删除
+const handlePhotoDelete = () => {
+  formData.photo = ''
+  ElMessage.success('照片已删除')
 }
 
 // 重置表单
@@ -330,6 +416,44 @@ defineExpose({
     .el-divider__text {
       font-weight: 600;
       color: #303133;
+    }
+  }
+
+  .form-item-tip {
+    font-size: 12px;
+    color: #909399;
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+
+  .avatar-uploader {
+    border: 1px dashed #d9d9d9;
+    border-radius: 6px;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s;
+    
+    &:hover {
+      border-color: #409eff;
+    }
+
+    .avatar {
+      width: 120px;
+      height: 120px;
+      display: block;
+      object-fit: cover;
+    }
+
+    .avatar-uploader-icon {
+      font-size: 28px;
+      color: #909399;
+      width: 120px;
+      height: 120px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #f5f7fa;
     }
   }
 }

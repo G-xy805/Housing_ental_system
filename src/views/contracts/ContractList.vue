@@ -1,7 +1,7 @@
 <template>
   <div class="contract-list-page">
     <div class="page-header">
-      <h2>合同管理</h2>
+      <h2>租客合同管理</h2>
       <el-button type="primary" @click="handleAdd" v-if="hasPermission('create')">
         <el-icon><Plus /></el-icon>
         新建合同
@@ -84,15 +84,10 @@
         v-loading="loading"
         @sort-change="handleSortChange"
       >
-        <el-table-column prop="contract_no" label="合同编号" min-width="120" sortable />
-        <el-table-column prop="tenant_name" label="租客姓名" min-width="100" />
+        <el-table-column prop="contract_no" label="合同编号" min-width="160" sortable />
+        <el-table-column prop="tenant_name" label="租客姓名" width="90" />
         <el-table-column prop="house_address" label="房源地址" min-width="180" show-overflow-tooltip />
-        <el-table-column label="房间号" width="80">
-          <template #default="scope">
-            <span>{{ scope.row.room_no || scope.row.room_number }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="租期" min-width="150">
+        <el-table-column label="租期" min-width="200">
           <template #default="scope">
             <div class="lease-period">
               <span>{{ formatChineseDate(scope.row.start_date) }}</span>
@@ -101,17 +96,17 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="rent_amount" label="租金 (元/月)" width="100" sortable>
+        <el-table-column prop="rent_amount" label="租金 (元/月)" width="90" sortable>
           <template #default="scope">
             <span>¥{{ scope.row.rent_amount }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="押金 (元)" width="100">
+        <el-table-column label="押金 (元)" width="90">
           <template #default="scope">
             <span>¥{{ scope.row.deposit_amount || scope.row.deposit }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="status" label="状态" width="90">
           <template #default="scope">
             <el-tag :type="getStatusType(scope.row.status)">
               {{ getStatusText(scope.row.status) }}
@@ -732,12 +727,12 @@ const getPaymentMethodValue = (type) => {
   return mapping[type] || 'press_one_pay_three'
 }
 
-// 格式化中文日期
+// 格式化日期为 YYYY-MM-DD
 const formatChineseDate = (dateStr) => {
   if (!dateStr) return '-'
   try {
     const date = dayjs(dateStr)
-    return date.format('YYYY 年 M 月 D 日')
+    return date.format('YYYY-MM-DD')
   } catch (error) {
     return dateStr
   }

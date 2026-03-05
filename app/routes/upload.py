@@ -91,6 +91,21 @@ def get_file_type(mime_type: str) -> str:
     return None
 
 
+def get_mime_type_from_extension(filename: str) -> str:
+    """
+    根据文件扩展名获取 MIME 类型
+    
+    Args:
+        filename: 文件名
+        
+    Returns:
+        str: MIME 类型
+    """
+    import mimetypes
+    mime_type, _ = mimetypes.guess_type(filename)
+    return mime_type or 'application/octet-stream'
+
+
 def validate_file(file, file_type: str = None) -> tuple:
     """
     验证文件
@@ -105,39 +120,40 @@ def validate_file(file, file_type: str = None) -> tuple:
     if not file or not file.filename:
         return False, "文件不能为空", None
     
-    filename = secure_filename(file.filename)
+    original_filename = file.filename
     
-    # 检查文件扩展名
-    if not allowed_file(filename, file_type):
-        if file_type == 'image':
+    if '.' not in original_filename:
+        return False, "文件名缺少扩展名", None
+    
+    ext = original_filename.rsplit('.', 1)[1].lower()
+    
+    if file_type == 'image':
+        if ext not in ALLOWED_IMAGE_EXTENSIONS:
             allowed_exts = ', '.join(ALLOWED_IMAGE_EXTENSIONS)
-        elif file_type == 'video':
-            allowed_exts = ', '.join(ALLOWED_VIDEO_EXTENSIONS)
-        else:
-            allowed_exts = ', '.join(ALLOWED_IMAGE_EXTENSIONS | ALLOWED_VIDEO_EXTENSIONS)
-        return False, f"不允许的文件格式，支持的格式：{allowed_exts}", None
-    
-    # 获取文件扩展名
-    ext = filename.rsplit('.', 1)[1].lower()
-    
-    # 根据扩展名确定文件类型
-    if ext in ALLOWED_IMAGE_EXTENSIONS:
+            return False, f"不允许的文件格式，支持的格式：{allowed_exts}", None
         detected_type = 'image'
         max_size = MAX_IMAGE_SIZE
-    elif ext in ALLOWED_VIDEO_EXTENSIONS:
+    elif file_type == 'video':
+        if ext not in ALLOWED_VIDEO_EXTENSIONS:
+            allowed_exts = ', '.join(ALLOWED_VIDEO_EXTENSIONS)
+            return False, f"不允许的文件格式，支持的格式：{allowed_exts}", None
         detected_type = 'video'
         max_size = MAX_VIDEO_SIZE
     else:
-        return False, "无法识别的文件类型", None
+        if ext not in ALLOWED_IMAGE_EXTENSIONS and ext not in ALLOWED_VIDEO_EXTENSIONS:
+            allowed_exts = ', '.join(ALLOWED_IMAGE_EXTENSIONS | ALLOWED_VIDEO_EXTENSIONS)
+            return False, f"不允许的文件格式，支持的格式：{allowed_exts}", None
+        
+        if ext in ALLOWED_IMAGE_EXTENSIONS:
+            detected_type = 'image'
+            max_size = MAX_IMAGE_SIZE
+        else:
+            detected_type = 'video'
+            max_size = MAX_VIDEO_SIZE
     
-    # 如果指定了文件类型，检查是否匹配
-    if file_type and detected_type != file_type:
-        return False, f"文件类型不匹配，需要 {file_type} 类型", None
-    
-    # 检查文件大小
-    file.seek(0, 2)  # 移动到文件末尾
+    file.seek(0, 2)
     file_size = file.tell()
-    file.seek(0)  # 重置文件指针
+    file.seek(0)
     
     if file_size == 0:
         return False, "文件不能为空", None
@@ -184,13 +200,10 @@ def save_file(file, file_type: str, sub_folder: str = None) -> tuple:
         tuple: (文件路径，文件 URL，错误消息)
     """
     try:
-        # 获取原始文件名
-        original_filename = secure_filename(file.filename)
+        original_filename = file.filename
         
-        # 生成唯一文件名
         unique_filename = generate_unique_filename(original_filename)
         
-        # 确定保存路径
         upload_folder = current_app.config['UPLOAD_FOLDER']
         
         if sub_folder:
@@ -198,14 +211,11 @@ def save_file(file, file_type: str, sub_folder: str = None) -> tuple:
         else:
             save_dir = os.path.join(upload_folder, file_type)
         
-        # 确保目录存在
         os.makedirs(save_dir, exist_ok=True)
         
-        # 保存文件
         file_path = os.path.join(save_dir, unique_filename)
         file.save(file_path)
         
-        # 生成访问 URL
         file_url = f"/uploads/{file_type}/{sub_folder + '/' if sub_folder else ''}{unique_filename}"
         
         return file_path, file_url, None
@@ -343,27 +353,57 @@ def upload_files():
         
         # 处理每个文件
         for idx, file in enumerate(files):
+            current_app.logger.info(f"处理文件 {idx}: filename={file.filename if file else 'None'}, content_type={file.content_type if file else 'None'}")
+            
             if not file or file.filename == '':
+                current_app.logger.warning(f"文件 {idx} 为空或没有文件名")
                 continue
             
             # 验证文件
             is_valid, error_msg, detected_type = validate_file(file, file_type_filter)
+            current_app.logger.info(f"文件验证结果: is_valid={is_valid}, error_msg={error_msg}, detected_type={detected_type}")
             
             if not is_valid:
                 failed_files.append({
                     'filename': file.filename,
                     'error': error_msg
                 })
+                current_app.logger.error(f"文件验证失败: {file.filename} - {error_msg}")
                 continue
             
-            # 获取 MIME 类型
+            original_filename = file.filename
+            ext = original_filename.rsplit('.', 1)[1].lower() if '.' in original_filename else ''
+            
             mime_type = file.content_type or 'application/octet-stream'
+            if mime_type == 'application/octet-stream':
+                mime_type = get_mime_type_from_extension(original_filename)
+            
+            if ext in ALLOWED_IMAGE_EXTENSIONS:
+                if ext == 'jpg' or ext == 'jpeg':
+                    mime_type = 'image/jpeg'
+                elif ext == 'png':
+                    mime_type = 'image/png'
+                elif ext == 'gif':
+                    mime_type = 'image/gif'
+                elif ext == 'webp':
+                    mime_type = 'image/webp'
+            elif ext in ALLOWED_VIDEO_EXTENSIONS:
+                if ext == 'mp4':
+                    mime_type = 'video/mp4'
+                elif ext == 'mov':
+                    mime_type = 'video/quicktime'
+                elif ext == 'avi':
+                    mime_type = 'video/x-msvideo'
+                elif ext == 'webm':
+                    mime_type = 'video/webm'
+            
+            current_app.logger.info(f"文件 {file.filename} 的 MIME 类型: {mime_type}")
             
             # 再次验证 MIME 类型
             if not Media.is_allowed_type(mime_type):
                 failed_files.append({
                     'filename': file.filename,
-                    'error': '不支持的文件类型'
+                    'error': f'不支持的文件类型: {mime_type}'
                 })
                 continue
             
@@ -427,7 +467,10 @@ def upload_files():
             'failed_files': failed_files
         }
         
-        return APIResponse.success(result, "上传成功", 201)
+        if len(uploaded_files) > 0:
+            return APIResponse.success(result, "上传成功", 201)
+        else:
+            return APIResponse.bad_request(result, "上传失败")
         
     except Exception as e:
         db.session.rollback()
@@ -596,14 +639,18 @@ def upload_house_files(house_id: int):
                 })
                 continue
             
-            # 获取 MIME 类型
+            # 获取 MIME 类型（优先从文件扩展名获取）
             mime_type = file.content_type or 'application/octet-stream'
+            # 如果 MIME 类型不是图片或视频，尝试从文件扩展名获取
+            if mime_type == 'application/octet-stream':
+                mime_type = get_mime_type_from_extension(file.filename)
+            current_app.logger.info(f"文件 {file.filename} 的 MIME 类型: {mime_type}")
             
             # 验证 MIME 类型
             if not Media.is_allowed_type(mime_type):
                 failed_files.append({
                     'filename': file.filename,
-                    'error': '不支持的文件类型'
+                    'error': f'不支持的文件类型: {mime_type}'
                 })
                 continue
             
@@ -652,14 +699,24 @@ def upload_house_files(house_id: int):
             f"用户 {g.username} 为房源 {house_id} 上传了 {len(uploaded_files)} 个文件"
         )
         
-        return APIResponse.success({
-            'house_id': house_id,
-            'uploaded_count': len(uploaded_files),
-            'failed_count': len(failed_files),
-            'files': uploaded_files,
-            'failed_files': failed_files,
-            'cover_updated': is_cover
-        }, "上传成功", 201)
+        if len(uploaded_files) > 0:
+            return APIResponse.success({
+                'house_id': house_id,
+                'uploaded_count': len(uploaded_files),
+                'failed_count': len(failed_files),
+                'files': uploaded_files,
+                'failed_files': failed_files,
+                'cover_updated': is_cover
+            }, "上传成功", 201)
+        else:
+            return APIResponse.bad_request({
+                'house_id': house_id,
+                'uploaded_count': len(uploaded_files),
+                'failed_count': len(failed_files),
+                'files': uploaded_files,
+                'failed_files': failed_files,
+                'cover_updated': is_cover
+            }, "上传失败")
         
     except Exception as e:
         db.session.rollback()

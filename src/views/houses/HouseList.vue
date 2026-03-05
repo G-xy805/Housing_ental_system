@@ -2,7 +2,7 @@
   <div class="house-list-page">
     <div class="page-header">
       <h2>房源管理</h2>
-      <el-button type="primary" @click="handleAdd" v-if="hasPermission('add')">
+      <el-button type="primary" @click="handleAdd" v-if="hasPermission('create')">
         <el-icon><Plus /></el-icon>
         新增房源
       </el-button>
@@ -166,7 +166,7 @@
 
     <!-- 空状态 -->
     <el-empty v-if="!loading && houseList.length === 0" description="暂无房源数据">
-      <el-button type="primary" @click="handleAdd" v-if="hasPermission('add')">
+      <el-button type="primary" @click="handleAdd" v-if="hasPermission('create')">
         添加房源
       </el-button>
     </el-empty>
@@ -251,8 +251,8 @@ const pagination = reactive({
 
 // 权限检查
 const hasPermission = (action) => {
-  // 管理员或房东可以操作
-  return userStore.isAdmin || userStore.userType === 'landlord'
+  // 使用 userStore 的权限检查方法
+  return userStore.hasPermission(action)
 }
 
 // 获取状态类型

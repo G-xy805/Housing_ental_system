@@ -10,6 +10,11 @@ from app.models.user import User
 from app.models import db
 from app.utils.decorators import login_required, admin_required
 from app.utils.responses import APIResponse
+from app.utils.redis_cache import (
+    get_cache_manager, 
+    CacheEventEmitter,
+    generate_cache_key
+)
 
 # 创建蓝图
 users_bp = Blueprint('users', __name__, url_prefix='/api/users')
@@ -84,9 +89,38 @@ def get_users():
     """
     try:
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        page_size = request.args.get('page_size', type=int)
+        per_page_arg = request.args.get('per_page', type=int)
+        per_page = min(page_size or per_page_arg or 20, 100)
         
-        query = User.query
+        # 尝试从缓存获取数据
+        cache_manager = get_cache_manager()
+        cache_key_params = {
+            'page': page,
+            'per_page': per_page,
+            'keyword': request.args.get('keyword', ''),
+            'username': request.args.get('username', ''),
+            'name': request.args.get('name', ''),
+            'phone': request.args.get('phone', ''),
+            'email': request.args.get('email', ''),
+            'role': request.args.get('role', ''),
+            'status': request.args.get('status', ''),
+            'order_by': request.args.get('order_by', 'created_at'),
+            'order': request.args.get('order', 'desc')
+        }
+        
+        # 生成缓存键
+        cache_key_suffix = generate_cache_key(**cache_key_params)
+        key_prefix = current_app.config.get('CACHE_KEY_PREFIX', 'housing_rental:')
+        cache_key = f"{key_prefix}users:list:{cache_key_suffix}"
+        
+        # 尝试从缓存获取
+        cached_result = cache_manager.get(cache_key)
+        if cached_result is not None:
+            current_app.logger.info(f"从缓存获取用户列表数据: {cache_key}")
+            return APIResponse.success(cached_result, "获取用户列表成功（缓存）")
+        
+        query = db.session.query(User).filter(User.deleted_at.is_(None))
         
         # 关键词搜索
         keyword = request.args.get('keyword')
@@ -148,10 +182,16 @@ def get_users():
             'has_prev': pagination.has_prev
         }
         
-        return APIResponse.success({
+        result = {
             'items': items,
             'pagination': pagination_info
-        }, "获取用户列表成功")
+        }
+        
+        # 缓存结果（缓存 5 分钟）
+        cache_manager.set(cache_key, result, timeout=300)
+        current_app.logger.info(f"用户列表数据已缓存: {cache_key}")
+        
+        return APIResponse.success(result, "获取用户列表成功")
         
     except Exception as e:
         current_app.logger.error(f"获取用户列表失败：{str(e)}")
@@ -226,6 +266,9 @@ def update_user(user_id: int):
         db.session.commit()
         db.session.refresh(user)
         
+        # 失效用户缓存
+        CacheEventEmitter.emit('user_updated')
+        
         result = format_user_response(user)
         return APIResponse.success(result, "用户信息更新成功")
         
@@ -257,6 +300,9 @@ def delete_user(user_id: int):
         user_name = user.name
         db.session.delete(user)
         db.session.commit()
+        
+        # 失效用户缓存
+        CacheEventEmitter.emit('user_deleted')
         
         current_app.logger.info(f"管理员 {g.username} 删除了用户 {user_id}: {user_name}")
         return APIResponse.success(None, "用户删除成功")

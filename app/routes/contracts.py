@@ -5,6 +5,7 @@
 from flask import Blueprint, request, jsonify, g, current_app
 from typing import Optional, Dict, Any
 from datetime import datetime, date, timedelta
+from dateutil.relativedelta import relativedelta
 
 from app.models.contract import Contract
 from app.models.house import House
@@ -179,6 +180,23 @@ def validate_contract_data(data: Dict, is_update: bool = False) -> tuple:
     return True, None, validated_data
 
 
+def optimize_contract_detail_query(query):
+    """
+    优化合同详情查询，使用 eager loading 避免 N+1 问题
+    
+    Args:
+        query: SQLAlchemy query 对象
+        
+    Returns:
+        优化后的 query 对象
+    """
+    from sqlalchemy.orm import joinedload
+    return query.options(
+        joinedload(Contract.tenant_rel),
+        joinedload(Contract.payments)
+    )
+
+
 def format_contract_response(contract: Contract, include_payments: bool = False) -> Dict:
     """
     格式化合同响应数据
@@ -194,7 +212,7 @@ def format_contract_response(contract: Contract, include_payments: bool = False)
     
     # 添加支付记录概要
     if include_payments:
-        payments = contract.payments.order_by(Payment.due_date.asc()).all()
+        payments = sorted(contract.payments, key=lambda p: p.due_date)
         data['payments'] = [payment.to_dict() for payment in payments]
         data['total_paid'] = sum(p.paid_amount for p in payments if p.status == 'paid')
         data['total_due'] = sum(p.amount for p in payments)
@@ -262,10 +280,12 @@ def get_contracts():
         
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        page_size = request.args.get('page_size', type=int)
+        per_page_arg = request.args.get('per_page', type=int)
+        per_page = min(page_size or per_page_arg or 20, 100)
         
-        # 构建查询
-        query = Contract.query
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(Contract).filter(Contract.deleted_at.is_(None))
         
         # 关键词搜索
         keyword = request.args.get('keyword')
@@ -394,7 +414,8 @@ def get_contract(contract_id: int):
         }
     """
     try:
-        contract = Contract.query.get(contract_id)
+        # 使用 eager loading 优化查询，避免 N+1 问题
+        contract = optimize_contract_detail_query(Contract.query).filter_by(id=contract_id).first()
         
         if not contract:
             return APIResponse.not_found("合同不存在")
@@ -476,8 +497,8 @@ def create_contract():
         # 刷新获取完整数据
         db.session.refresh(contract)
         
-        # 生成支付计划
-        generate_payment_plan(contract)
+        # 取消自动生成支付计划，改为手动添加
+        # generate_payment_plan(contract)
         
         # 格式化响应
         result = format_contract_response(contract)
@@ -591,14 +612,12 @@ def delete_contract(contract_id: int):
             return APIResponse.not_found("合同不存在")
         
         # 检查是否有未完成的支付记录
-        unpaid_payments = contract.payments.filter(
-            Payment.status.in_(['pending', 'overdue', 'partial'])
-        ).count()
+        unpaid_payments = [p for p in contract.payments if p.status in ['pending', 'overdue', 'partial']]
         
-        if unpaid_payments > 0:
+        if len(unpaid_payments) > 0:
             return APIResponse.bad_request(
-                f"合同有 {unpaid_payments} 个未完成的支付记录，无法删除",
-                {"unpaid_payments": unpaid_payments}
+                f"合同有 {len(unpaid_payments)} 个未完成的支付记录，无法删除",
+                {"unpaid_payments": len(unpaid_payments)}
             )
         
         contract_no = contract.contract_no
@@ -693,15 +712,15 @@ def renew_contract(contract_id: int):
             house_id=contract.house_id,
             room_id=contract.room_id,
             tenant_id=contract.tenant_id,
-            landlord_id=contract.landlord_id,
             start_date=contract.end_date,  # 从原合同结束日期开始
             end_date=new_end_date,
             rent_amount=data.get('rent_amount', contract.rent_amount),
-            deposit=contract.deposit,
+            deposit_amount=contract.deposit_amount,
             payment_type=data.get('payment_type', contract.payment_type),
             payment_cycle=contract.payment_cycle,
             description=contract.description,
-            remark=data.get('remark', '合同续签')
+            remark=data.get('remark', '合同续签'),
+            status='active'  # 续签合同直接激活
         )
         
         # 标记原合同为已续签
@@ -720,8 +739,8 @@ def renew_contract(contract_id: int):
         # 刷新获取完整数据
         db.session.refresh(new_contract)
         
-        # 生成新合同的支付计划
-        generate_payment_plan(new_contract)
+        # 取消自动生成支付计划，改为手动添加
+        # generate_payment_plan(new_contract)
         
         current_app.logger.info(f"用户 {g.username} 续签了合同 {contract.contract_no}")
         
@@ -749,8 +768,14 @@ def activate_contract(contract_id: int):
     Response:
         {
             "success": true,
-            "message": "合同激活成功",
-            "data": {...}
+            "message": "合同激活成功，已生成 12 笔租金记录和 1 笔押金记录",
+            "data": {
+                "contract": {...},
+                "payment_summary": {
+                    "rent_count": 12,
+                    "deposit_count": 1
+                }
+            }
         }
     """
     try:
@@ -770,19 +795,44 @@ def activate_contract(contract_id: int):
         # 更新合同状态
         contract.status = 'active'
         
+        # 生成支付计划（在同一事务中）
+        payment_summary = generate_payment_plan(contract)
+        
+        # 如果租金记录为0，记录警告（可能是租期为0或其他原因）
+        if payment_summary['rent_count'] == 0:
+            current_app.logger.warning(
+                f"合同 {contract.contract_no} 未生成租金记录，请检查合同租期设置"
+            )
+        
         # 更新房源状态
         if contract.house:
             contract.house.update_status()
         
+        # 提交事务（包含合同激活和支付计划生成）
         db.session.commit()
         
-        current_app.logger.info(f"用户 {g.username} 激活了合同 {contract.contract_no}")
+        current_app.logger.info(
+            f"用户 {g.username} 激活了合同 {contract.contract_no}，"
+            f"生成 {payment_summary['rent_count']} 笔租金记录和 "
+            f"{payment_summary['deposit_count']} 笔押金记录"
+        )
         
-        return APIResponse.success(contract.to_dict(), "合同激活成功")
+        # 构建返回消息
+        message = f"合同激活成功，已生成 {payment_summary['rent_count']} 笔租金记录"
+        if payment_summary['deposit_count'] > 0:
+            message += f"和 {payment_summary['deposit_count']} 笔押金记录"
+        
+        return APIResponse.success(
+            {
+                "contract": contract.to_dict(),
+                "payment_summary": payment_summary
+            },
+            message
+        )
         
     except Exception as e:
         db.session.rollback()
-        current_app.logger.error(f"合同激活失败：{str(e)}")
+        current_app.logger.error(f"合同激活失败：{str(e)}", exc_info=True)
         return APIResponse.server_error("合同激活失败")
 
 
@@ -848,9 +898,7 @@ def terminate_contract(contract_id: int):
             contract.house.update_status()
         
         # 处理未完成的支付记录
-        unpaid_payments = contract.payments.filter(
-            Payment.status.in_(['pending', 'overdue', 'partial'])
-        ).all()
+        unpaid_payments = [p for p in contract.payments if p.status in ['pending', 'overdue', 'partial']]
         
         for payment in unpaid_payments:
             # 如果支付日期在终止日期之后，取消支付
@@ -1008,72 +1056,144 @@ def get_contract_payments(contract_id: int):
 # 支付计划生成
 # ============================================================================
 
-def generate_payment_plan(contract: Contract):
+def generate_payment_plan(contract: Contract) -> Dict[str, int]:
     """
     生成合同支付计划
     
+    根据合同租期和付款周期，生成多笔租金记录和押金记录。
+    
     Args:
         contract: 合同对象
+        
+    Returns:
+        dict: 包含生成的租金记录数量和押金记录数量
+              例如: {'rent_count': 12, 'deposit_count': 1}
     """
+    # payment_type 到 payment_cycle 的映射（月数）
+    PAYMENT_CYCLE_MAP = {
+        '月付': 1,
+        '季付': 3,
+        '半年付': 6,
+        '年付': 12
+    }
+    
+    rent_count = 0
+    deposit_count = 0
+    
     try:
-        # 计算租赁月数
         start_date = contract.start_date
         end_date = contract.end_date
         
-        months = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
-        if end_date.day > start_date.day:
-            months += 1
+        # 验证日期有效性
+        if not start_date or not end_date:
+            current_app.logger.error(f"合同 {contract.contract_no} 缺少开始或结束日期")
+            return {'rent_count': 0, 'deposit_count': 0}
         
-        if months <= 0:
-            return
+        if end_date <= start_date:
+            current_app.logger.error(f"合同 {contract.contract_no} 结束日期必须晚于开始日期")
+            return {'rent_count': 0, 'deposit_count': 0}
         
-        # 只生成一个租金支付记录
-        amount = contract.rent_amount * months
+        # 获取付款周期（月数）
+        payment_type = contract.payment_type or '月付'
+        cycle_months = PAYMENT_CYCLE_MAP.get(payment_type, 1)
         
-        # 计算支付周期
-        period_start = start_date
-        period_end = end_date
-        
-        # 计算应缴日期
-        due_date = start_date
-        
-        # 创建支付记录
-        payment = Payment(
-            payment_no=Payment.generate_payment_no(),
-            contract_id=contract.id,
-            payment_type='rent',
-            amount=amount,
-            paid_amount=0,
-            period_start=period_start,
-            period_end=period_end,
-            due_date=due_date,
-            status='pending',
-            late_fee_rate=0.0005,  # 日利率 0.05%
-            remark='租金'
+        current_app.logger.info(
+            f"开始为合同 {contract.contract_no} 生成支付计划，"
+            f"租期: {start_date} 至 {end_date}，付款方式: {payment_type}（{cycle_months}个月/期）"
         )
         
-        db.session.add(payment)
+        # 生成租金支付记录
+        current_period_start = start_date
         
-        # 创建押金支付记录
-        if contract.deposit_amount > 0:
+        while current_period_start < end_date:
+            # 计算当前周期的结束日期（周期结束日期为下个周期开始日期的前一天）
+            current_period_end = current_period_start + relativedelta(months=cycle_months) - timedelta(days=1)
+            
+            # 如果周期结束日期超过合同结束日期，则使用合同结束日期
+            if current_period_end >= end_date:
+                current_period_end = end_date
+            
+            # 计算该周期的实际月数（用于计算金额）
+            # 使用 relativedelta 计算精确的月份差
+            delta = relativedelta(current_period_end, current_period_start)
+            actual_months = delta.years * 12 + delta.months
+            
+            # 如果不满一个月，按实际天数比例计算
+            if actual_months == 0:
+                # 计算实际天数
+                actual_days = (current_period_end - current_period_start).days + 1
+                # 按每月30天计算比例
+                actual_months = actual_days / 30.0
+            else:
+                # 如果有剩余天数，也需要考虑
+                if delta.days > 0:
+                    # 将剩余天数转换为月的小数部分
+                    actual_months += delta.days / 30.0
+            
+            # 计算该周期的租金金额
+            amount = contract.rent_amount * actual_months
+            
+            # 创建租金支付记录
+            payment = Payment(
+                payment_no=Payment.generate_payment_no(),
+                contract_id=contract.id,
+                payment_type='rent',
+                amount=round(amount, 2),  # 保留两位小数
+                paid_amount=0,
+                period_start=current_period_start,
+                period_end=current_period_end,
+                due_date=current_period_start,  # 应缴日期为周期开始日期
+                status='pending',
+                late_fee_rate=0.0005,  # 日利率 0.05%
+                remark=f'租金（{current_period_start.strftime("%Y-%m-%d")} 至 {current_period_end.strftime("%Y-%m-%d")}）'
+            )
+            
+            db.session.add(payment)
+            rent_count += 1
+            
+            current_app.logger.debug(
+                f"生成租金记录 #{rent_count}: {current_period_start} 至 {current_period_end}，"
+                f"金额: {amount:.2f}元，周期月数: {actual_months:.2f}"
+            )
+            
+            # 移动到下一个周期
+            current_period_start = current_period_end + timedelta(days=1)
+        
+        # 生成押金支付记录
+        if contract.deposit_amount and contract.deposit_amount > 0:
             deposit_payment = Payment(
                 payment_no=Payment.generate_payment_no(),
                 contract_id=contract.id,
                 payment_type='deposit',
                 amount=contract.deposit_amount,
                 paid_amount=0,
-                due_date=start_date,
+                due_date=start_date,  # 押金应缴日期为合同开始日期
                 status='pending',
                 remark='押金'
             )
             db.session.add(deposit_payment)
+            deposit_count = 1
+            
+            current_app.logger.info(f"生成押金记录: {contract.deposit_amount}元")
         
-        db.session.commit()
-        current_app.logger.info(f"为合同 {contract.contract_no} 生成了支付计划")
+        # 不在函数内部 commit，由调用者控制事务
+        current_app.logger.info(
+            f"合同 {contract.contract_no} 支付计划生成完成: "
+            f"{rent_count}笔租金记录，{deposit_count}笔押金记录"
+        )
+        
+        return {
+            'rent_count': rent_count,
+            'deposit_count': deposit_count
+        }
         
     except Exception as e:
-        current_app.logger.error(f"生成支付计划失败：{str(e)}")
-        db.session.rollback()
+        current_app.logger.error(f"生成支付计划失败: {str(e)}", exc_info=True)
+        # 不在函数内部 rollback，由调用者控制事务
+        return {
+            'rent_count': 0,
+            'deposit_count': 0
+        }
 
 
 # ============================================================================

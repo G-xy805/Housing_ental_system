@@ -395,7 +395,18 @@ watch(imageList, (newList) => {
 
 // 权限检查
 const hasPermission = (action) => {
-  return userStore.isAdmin || userStore.userType === 'landlord'
+  // 管理员拥有所有权限
+  if (userStore.isAdmin) {
+    return true
+  }
+  
+  // 房东权限：查看、创建、编辑（无删除）
+  if (userStore.userType === 'landlord') {
+    const landlordPermissions = ['view', 'create', 'edit', 'update']
+    return landlordPermissions.includes(action)
+  }
+  
+  return false
 }
 
 // 获取状态类型

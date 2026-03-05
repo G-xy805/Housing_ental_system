@@ -182,6 +182,7 @@ import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import { useUserStore } from '@/store/user'
 import { getCurrentUser, updateUserInfo, changePassword } from '@/api/user'
+import { uploadImage } from '@/api/upload'
 
 const userStore = useUserStore()
 const activeTab = ref('info')
@@ -272,7 +273,7 @@ const fetchUserInfo = async () => {
   }
 }
 
-const beforeAvatarUpload = (file) => {
+const beforeAvatarUpload = async (file) => {
   const isImage = file.type.startsWith('image/')
   const isLt2M = file.size / 1024 / 1024 < 2
 
@@ -285,8 +286,32 @@ const beforeAvatarUpload = (file) => {
     return false
   }
   
-  ElMessage.info('头像上传功能开发中...')
-  return false
+  try {
+    // 上传图片
+    const response = await uploadImage(file)
+    
+    if (response.success && response.data.files && response.data.files.length > 0) {
+      const avatarUrl = response.data.files[0].file_url
+      
+      // 更新用户信息中的头像
+      await updateUserInfo({ avatar: avatarUrl })
+      
+      // 更新用户存储中的头像
+      userStore.updateUserInfo({ avatar: avatarUrl })
+      
+      ElMessage.success('头像上传成功')
+      return false // 阻止默认上传行为，因为我们已经处理了上传
+    } else {
+      // 显示详细的错误信息
+      const errorMessage = response.data?.failed_files?.[0]?.error || '头像上传失败'
+      ElMessage.error(errorMessage)
+      return false
+    }
+  } catch (error) {
+    console.error('上传头像失败', error)
+    ElMessage.error('上传失败，请重试')
+    return false
+  }
 }
 
 const handleUpdateInfo = async () => {

@@ -94,4 +94,24 @@ export function getContractStats() {
   return request.get('/contracts/stats')
 }
 
+/**
+ * 获取即将到期的合同
+ * @param {Object} params 查询参数
+ * @param {number} [params.days=30] 查询多少天内到期的合同
+ * @returns {Promise}
+ */
+export function getExpiringContracts(params) {
+  return request.get('/contracts/expiring', { params })
+}
+
+/**
+ * 获取合同的支付记录
+ * @param {number} id 合同 ID
+ * @param {Object} params 查询参数
+ * @returns {Promise}
+ */
+export function getContractPayments(id, params) {
+  return request.get(`/contracts/${id}/payments`, { params })
+}
+
 

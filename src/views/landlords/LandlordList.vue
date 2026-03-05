@@ -121,9 +121,27 @@
       destroy-on-close
     >
       <div v-loading="detailLoading" class="detail-content">
-        <!-- 基本信息 -->
+        <div class="landlord-header">
+          <div class="landlord-photo">
+            <el-avatar 
+              v-if="currentLandlord.photo" 
+              :src="currentLandlord.photo" 
+              :size="100"
+              fit="cover"
+            />
+            <el-avatar v-else :size="100" class="avatar-placeholder">
+              {{ currentLandlord.name?.charAt(0) || '?' }}
+            </el-avatar>
+          </div>
+          <div class="landlord-basic">
+            <h3 class="landlord-name">{{ currentLandlord.name }}</h3>
+            <el-tag :type="getStatusType(currentLandlord.status)" style="margin-top: 8px;">
+              {{ getStatusText(currentLandlord.status) }}
+            </el-tag>
+          </div>
+        </div>
+        
         <el-descriptions title="基本信息" :column="2" border>
-          <el-descriptions-item label="姓名">{{ currentLandlord.name }}</el-descriptions-item>
           <el-descriptions-item label="手机号">{{ currentLandlord.phone }}</el-descriptions-item>
           <el-descriptions-item label="身份证号">
             {{ maskIdCard(currentLandlord.id_card) }}
@@ -135,11 +153,6 @@
           <el-descriptions-item label="房产证编号">{{ currentLandlord.property_cert_no || '-' }}</el-descriptions-item>
           <el-descriptions-item label="房产地址" :span="2">
             {{ currentLandlord.property_address || '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="状态">
-            <el-tag :type="getStatusType(currentLandlord.status)">
-              {{ getStatusText(currentLandlord.status) }}
-            </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="备注" :span="2">
             {{ currentLandlord.remark || '-' }}
@@ -356,7 +369,7 @@ const currentLandlordData = ref({})
 
 // 权限检查
 const hasPermission = (action) => {
-  return userStore.isAdmin || userStore.userType === 'landlord'
+  return userStore.hasPermission(action)
 }
 
 // 获取状态类型
@@ -603,6 +616,7 @@ const handleEdit = async (row) => {
         address: detail.property_address || detail.address || '',
         status: detail.status,
         remark: detail.remark || '',
+        photo: detail.photo || '',
         houses_count: detail.houses_count || 0,
         contracts_count: detail.contracts_count || 0
       }
@@ -740,6 +754,34 @@ onMounted(() => {
   }
 
   .detail-content {
+    .landlord-header {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 20px;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 8px;
+      
+      .landlord-photo {
+        .avatar-placeholder {
+          background-color: rgba(255, 255, 255, 0.2);
+          color: #fff;
+          font-size: 36px;
+          font-weight: bold;
+        }
+      }
+      
+      .landlord-basic {
+        .landlord-name {
+          margin: 0;
+          font-size: 24px;
+          font-weight: bold;
+          color: #fff;
+        }
+      }
+    }
+    
     .el-descriptions {
       margin-bottom: 20px;
     }

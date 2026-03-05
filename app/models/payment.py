@@ -48,7 +48,7 @@ class Payment(BaseModel):
     late_fee_rate = db.Column(db.Float, default=0.0005, comment='滞纳金比例（每日）')
     overdue_days = db.Column(db.Integer, default=0, comment='逾期天数')
     
-    # 状态：pending-待支付，paid-已支付，overdue-逾期，partial-部分支付，refunded-已退款
+    # 状态：pending-待支付，paid-已支付，overdue-逾期，partial-部分支付，refunded-已退款，cancelled-已取消
     status = db.Column(db.String(20), default='pending', comment='支付状态')
     
     # 备注
@@ -72,7 +72,7 @@ class Payment(BaseModel):
     )
     
     # 关系
-    operator = db.relationship('User', foreign_keys=[operator_id])
+    operator = db.relationship('User', foreign_keys=[operator_id], overlaps='operated_payments')
     contract_rel = db.relationship('Contract', back_populates='payments', lazy='joined')
     
     # 支付类型映射
@@ -185,6 +185,10 @@ class Payment(BaseModel):
             if self.contract_rel.tenant_rel:
                 data['tenant_name'] = self.contract_rel.tenant_rel.name
                 data['tenant_phone'] = self.contract_rel.tenant_rel.phone
+            if self.contract_rel.house:
+                data['house_address'] = self.contract_rel.house.address
+            if self.contract_rel.room:
+                data['room_no'] = self.contract_rel.room.room_number
         if self.operator:
             data['operator_name'] = self.operator.username
         data['total_amount'] = self.get_total_amount()
@@ -192,18 +196,6 @@ class Payment(BaseModel):
         data['days_until_due'] = self.get_days_until_due()
         data['payment_type_name'] = self.PAYMENT_TYPES.get(self.payment_type, self.payment_type)
         data['payment_method_name'] = self.PAYMENT_METHODS.get(self.payment_method, self.payment_method)
-        return data
-    
-    def __repr__(self):
-        return f'<Payment {self.payment_no}>'
-    
-    def to_dict(self):
-        """转换为字典"""
-        data = super().to_dict()
-        if self.contract_rel:
-            data['contract_no'] = self.contract_rel.contract_no
-        if self.operator:
-            data['operator_name'] = self.operator.username
         return data
     
     def __repr__(self):

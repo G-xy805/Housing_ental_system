@@ -1,6 +1,9 @@
 """
 房间模型（支持合租）
 """
+from datetime import datetime
+from sqlalchemy import event
+from sqlalchemy.orm.attributes import get_history
 from .base import db, BaseModel
 
 
@@ -61,3 +64,113 @@ class Room(BaseModel):
     
     def __repr__(self):
         return f'<Room {self.house_id}-{self.room_number}>'
+
+
+# ==================== SQLAlchemy 事件监听器 ====================
+
+@event.listens_for(Room, 'after_update')
+def on_room_status_update(mapper, connection, target):
+    """
+    Room 模型的 after_update 事件监听器
+    
+    当房间状态发生变化时，自动更新所属房源的状态
+    
+    Args:
+        mapper: SQLAlchemy mapper 对象
+        connection: 数据库连接对象
+        target: Room 实例对象
+    
+    说明：
+        1. 只在房间状态实际变化时触发更新
+        2. 使用 get_history 检查状态是否真正改变
+        3. 避免循环触发和性能问题
+        4. 支持整租和合租两种模式
+        5. 使用纯 SQL 查询避免 session flush 冲突
+    """
+    # 检查状态字段是否有变化
+    history = get_history(target, 'status')
+    
+    # history 返回元组：(deleted, unchanged, added)
+    # 如果 added 不为空，说明状态发生了变化
+    if not history.added:
+        return
+    
+    # 获取状态变化前后的值
+    old_status = history.deleted[0] if history.deleted else None
+    new_status = history.added[0]
+    
+    # 如果状态实际没有变化，直接返回
+    if old_status == new_status:
+        return
+    
+    # 获取关联的房源 ID
+    house_id = target.house_id
+    
+    if not house_id:
+        return
+    
+    try:
+        # 使用纯 SQL 查询获取房源信息，避免触发 session flush
+        from sqlalchemy import text
+        
+        # 查询房源的租赁类型
+        house_result = connection.execute(
+            text("SELECT rental_type FROM houses WHERE id = :house_id"),
+            {'house_id': house_id}
+        ).fetchone()
+        
+        if not house_result:
+            return
+        
+        rental_type = house_result[0]
+        
+        # 整租模式：房源状态由合同决定，不在此处理
+        if rental_type == 'whole':
+            return
+        
+        # 合租模式：根据房间状态计算房源状态
+        # 使用纯 SQL 查询统计房间状态
+        room_stats = connection.execute(
+            text("""
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status = 'rented' THEN 1 ELSE 0 END) as rented,
+                    SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) as available
+                FROM rooms 
+                WHERE house_id = :house_id AND is_active = 1
+            """),
+            {'house_id': house_id}
+        ).fetchone()
+        
+        if not room_stats:
+            return
+        
+        total_rooms = room_stats[0]
+        rented_rooms = room_stats[1] or 0
+        available_rooms = room_stats[2] or 0
+        
+        # 计算房源状态
+        if total_rooms == 0:
+            new_status = 'available'
+        elif rented_rooms == total_rooms:
+            new_status = 'rented'
+        elif available_rooms == total_rooms:
+            new_status = 'available'
+        else:
+            new_status = 'partially_rented'
+        
+        # 使用 connection 执行更新，确保在同一事务中
+        connection.execute(
+            text("""
+                UPDATE houses 
+                SET status = :status, updated_at = :updated_at 
+                WHERE id = :house_id
+            """),
+            {'status': new_status, 'updated_at': datetime.now(), 'house_id': house_id}
+        )
+        
+    except Exception as e:
+        # 记录错误但不抛出异常，避免影响主流程
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f'更新房源状态失败: {e}', exc_info=True)

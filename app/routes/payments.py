@@ -12,6 +12,10 @@ from app.models.contract import Contract
 from app.models import db
 from app.utils.decorators import login_required, admin_required, permission_required
 from app.utils.responses import APIResponse, PaginationResponse
+from app.utils.query_optimizer import (
+    optimize_payment_query,
+    optimize_payment_detail_query
+)
 
 # 创建蓝图
 payments_bp = Blueprint('payments', __name__, url_prefix='/api/payments')
@@ -210,10 +214,12 @@ def get_payments():
     try:
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        page_size = request.args.get('page_size', type=int)
+        per_page_arg = request.args.get('per_page', type=int)
+        per_page = min(page_size or per_page_arg or 20, 100)
         
-        # 构建查询
-        query = Payment.query
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(Payment).filter(Payment.deleted_at.is_(None))
         
         # 合同 ID 筛选
         contract_id = request.args.get('contract_id', type=int)
@@ -334,7 +340,8 @@ def get_payment(payment_id: int):
         }
     """
     try:
-        payment = Payment.query.get(payment_id)
+        # 使用 eager loading 优化查询，避免 N+1 问题
+        payment = optimize_payment_detail_query(Payment.query).filter_by(id=payment_id).first()
         
         if not payment:
             return APIResponse.not_found("支付记录不存在")
@@ -569,10 +576,12 @@ def verify_payment(payment_id: int):
         if not payment:
             return APIResponse.not_found("支付记录不存在")
         
-        # 检查权限
+        # 检查权限（管理员或房源负责人）
         contract = Contract.query.get(payment.contract_id)
-        if contract and contract.landlord_id != g.user_id and g.user_role != 'admin':
-            return APIResponse.forbidden("您没有权限操作此支付记录")
+        if contract and contract.house and g.user_role != 'admin':
+            # 通过房源获取房东信息
+            if contract.house.landlord_id != g.user_id and contract.house.owner_id != g.user_id:
+                return APIResponse.forbidden("您没有权限操作此支付记录")
         
         # 获取请求数据
         data = request.get_json()
@@ -673,10 +682,14 @@ def get_overdue_payments():
     try:
         # 获取查询参数
         page = request.args.get('page', 1, type=int)
-        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        per_page = min(
+            request.args.get('page_size', request.args.get('per_page', 20), type=int),
+            100
+        )
         
-        # 构建查询
-        query = Payment.query.filter(
+        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
+        query = db.session.query(Payment).filter(
+            Payment.deleted_at.is_(None),
             Payment.status.in_(['pending', 'partial', 'overdue']),
             Payment.due_date < date.today()
         )

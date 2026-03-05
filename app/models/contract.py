@@ -2,6 +2,7 @@
 租赁合同模型
 """
 from datetime import datetime, date
+from sqlalchemy import event, case
 from .base import db, BaseModel
 
 
@@ -57,7 +58,7 @@ class Contract(BaseModel):
     
     # 关系 - 使用 back_populates 避免与 Tenant 模型冲突
     tenant_rel = db.relationship('Tenant', back_populates='contracts', lazy='joined')
-    payments = db.relationship('Payment', back_populates='contract_rel', lazy='dynamic')
+    payments = db.relationship('Payment', back_populates='contract_rel', lazy='selectin')
     
     @classmethod
     def generate_contract_no(cls):
@@ -107,6 +108,9 @@ class Contract(BaseModel):
         if self.room:
             data['room_number'] = self.room.room_number
             data['room_name'] = self.room.name
+            data['room_area'] = self.room.area
+        elif self.house:
+            data['room_area'] = self.house.area
         if self.tenant_rel:
             data['tenant_name'] = self.tenant_rel.name
             data['tenant_phone'] = self.tenant_rel.phone
@@ -118,3 +122,45 @@ class Contract(BaseModel):
     
     def __repr__(self):
         return f'<Contract {self.contract_no}>'
+
+
+# ==================== 事件监听器 ====================
+
+@event.listens_for(Contract, 'after_update')
+def handle_contract_status_change(mapper, connection, target):
+    """
+    合同状态变更后的级联处理
+    
+    当合同状态变为 'terminated' 或 'expired' 时：
+    1. 自动取消所有未支付的支付记录（状态为 'pending'）
+    2. 将这些支付记录的状态标记为 'cancelled'
+    
+    Args:
+        mapper: SQLAlchemy mapper 对象
+        connection: 数据库连接对象
+        target: 被更新的 Contract 实例
+    """
+    # 检查状态是否变更为 terminated 或 expired
+    if target.status in ['terminated', 'expired']:
+        # 导入 Payment 模型（避免循环导入）
+        from .payment import Payment
+        
+        # 构建取消原因说明
+        cancel_reason = f'[系统自动取消] 合同已{target.status}，支付记录自动取消'
+        
+        # 使用 connection 执行批量更新，提高性能
+        # 只更新状态为 'pending' 的支付记录
+        # 使用 CASE WHEN 处理备注字段，避免 NULL 拼接问题
+        connection.execute(
+            Payment.__table__.update()
+            .where(Payment.__table__.c.contract_id == target.id)
+            .where(Payment.__table__.c.status == 'pending')
+            .values(
+                status='cancelled',
+                remark=case(
+                    (Payment.__table__.c.remark.is_(None), cancel_reason),
+                    (Payment.__table__.c.remark == '', cancel_reason),
+                    else_=Payment.__table__.c.remark + '\n' + cancel_reason
+                )
+            )
+        )

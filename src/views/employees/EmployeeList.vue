@@ -169,7 +169,7 @@
               {{ formatDate(row.last_login) }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" min-width="220" fixed="right" align="center">
+          <el-table-column label="操作" min-width="280" fixed="right" align="center">
             <template #default="{ row }">
               <div class="action-buttons">
                 <el-button type="primary" size="small" link @click="handleView(row)">
@@ -230,52 +230,85 @@
       class="form-dialog"
     >
       <el-form
-        ref="formRef"
-        :model="formData"
-        :rules="formRules"
-        label-width="100px"
-        class="form-content"
-      >
-        <el-form-item label="用户名" prop="username">
-          <el-input
-            v-model="formData.username"
-            placeholder="请输入用户名"
-            :disabled="isEdit"
-          />
-        </el-form-item>
-        <el-form-item v-if="!isEdit" label="密码" prop="password">
-          <el-input
-            v-model="formData.password"
-            type="password"
-            placeholder="请输入密码"
-            show-password
-          />
-        </el-form-item>
-        <el-form-item label="姓名" prop="name">
-          <el-input v-model="formData.name" placeholder="请输入姓名" />
-        </el-form-item>
-        <el-form-item label="手机号" prop="phone">
-          <el-input v-model="formData.phone" placeholder="请输入手机号" />
-        </el-form-item>
-        <el-form-item label="邮箱" prop="email">
-          <el-input v-model="formData.email" placeholder="请输入邮箱" />
-        </el-form-item>
-        <el-form-item label="职位" prop="position">
-          <el-input v-model="formData.position" placeholder="请输入职位" />
-        </el-form-item>
-        <el-form-item label="角色" prop="role">
-          <el-select v-model="formData.role" placeholder="请选择角色">
-            <el-option label="管理员" value="admin" />
-            <el-option label="员工" value="staff" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="isEdit" label="状态" prop="status">
-          <el-select v-model="formData.status" placeholder="请选择状态">
-            <el-option label="在职" value="active" />
-            <el-option label="离职" value="resigned" />
-            <el-option label="禁用" value="disabled" />
-          </el-select>
-        </el-form-item>
+      ref="formRef"
+      :model="formData"
+      :rules="formRules"
+      label-width="100px"
+      class="form-content"
+    >
+      <el-form-item label="用户名" prop="username">
+        <el-input
+          v-model="formData.username"
+          placeholder="请输入用户名"
+          :disabled="isEdit"
+        />
+      </el-form-item>
+      <el-form-item v-if="!isEdit" label="密码" prop="password">
+        <el-input
+          v-model="formData.password"
+          type="password"
+          placeholder="请输入密码"
+          show-password
+        />
+      </el-form-item>
+      <el-form-item label="姓名" prop="name">
+        <el-input v-model="formData.name" placeholder="请输入姓名" />
+      </el-form-item>
+      <el-form-item label="身份证号" prop="id_card">
+        <el-input 
+          v-model="formData.id_card" 
+          placeholder="请输入身份证号" 
+          maxlength="18" 
+          :disabled="isEdit && hasIdCard"
+        />
+        <div v-if="isEdit && hasIdCard" class="form-tip">身份证号不可修改，如需更改请联系管理员</div>
+      </el-form-item>
+      <el-form-item label="手机号" prop="phone">
+        <el-input v-model="formData.phone" placeholder="请输入手机号" />
+      </el-form-item>
+      <el-form-item label="邮箱" prop="email">
+        <el-input v-model="formData.email" placeholder="请输入邮箱" />
+      </el-form-item>
+      <el-form-item label="职位" prop="position">
+        <el-input v-model="formData.position" placeholder="请输入职位" />
+      </el-form-item>
+      <el-form-item label="角色" prop="role">
+        <el-select v-model="formData.role" placeholder="请选择角色">
+          <el-option label="管理员" value="admin" />
+          <el-option label="员工" value="staff" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="头像" prop="avatar">
+        <div class="upload-container">
+          <el-upload
+            class="avatar-uploader"
+            action="#"
+            :http-request="handlePhotoUpload"
+            :show-file-list="false"
+            :before-upload="beforePhotoUpload"
+          >
+            <img v-if="formData.avatar" :src="formData.avatar" class="avatar" />
+            <el-icon v-else class="avatar-uploader-icon"><Plus /></el-icon>
+          </el-upload>
+          <el-button
+            v-if="formData.avatar"
+            type="text"
+            size="small"
+            class="delete-photo-btn"
+            @click="handlePhotoDelete"
+          >
+            <el-icon><Delete /></el-icon>
+            删除头像
+          </el-button>
+        </div>
+      </el-form-item>
+      <el-form-item v-if="isEdit" label="状态" prop="status">
+        <el-select v-model="formData.status" placeholder="请选择状态">
+          <el-option label="在职" value="active" />
+          <el-option label="离职" value="resigned" />
+          <el-option label="禁用" value="disabled" />
+        </el-select>
+      </el-form-item>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
@@ -312,12 +345,24 @@
     </el-dialog>
 
     <el-dialog v-model="detailVisible" title="员工详情" width="800px" class="detail-dialog">
-      <el-descriptions :column="2" border>
+      <div class="detail-header">
+        <div class="detail-avatar">
+          <img v-if="currentEmployee?.avatar" :src="currentEmployee.avatar" alt="头像" class="avatar-image" />
+          <div v-else class="avatar-placeholder" :style="{ background: getAvatarColor(currentEmployee?.name) }">
+            {{ currentEmployee?.name?.charAt(0) || 'U' }}
+          </div>
+        </div>
+        <div class="detail-basic-info">
+          <h3 class="detail-name">{{ currentEmployee?.name }}</h3>
+          <p class="detail-position">{{ currentEmployee?.position || '暂无职位' }}</p>
+          <span class="role-badge" :class="currentEmployee?.role">
+            {{ roleMap[currentEmployee?.role] || '-' }}
+          </span>
+        </div>
+      </div>
+      <el-descriptions :column="2" border class="detail-descriptions">
         <el-descriptions-item label="ID">
           {{ currentEmployee?.id }}
-        </el-descriptions-item>
-        <el-descriptions-item label="姓名">
-          {{ currentEmployee?.name }}
         </el-descriptions-item>
         <el-descriptions-item label="用户名">
           {{ currentEmployee?.username }}
@@ -328,13 +373,8 @@
         <el-descriptions-item label="邮箱">
           {{ currentEmployee?.email || '-' }}
         </el-descriptions-item>
-        <el-descriptions-item label="职位">
-          {{ currentEmployee?.position || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="角色">
-          <span class="role-badge" :class="currentEmployee?.role">
-            {{ roleMap[currentEmployee?.role] || '-' }}
-          </span>
+        <el-descriptions-item label="身份证号">
+          {{ maskIdCard(currentEmployee?.id_card) }}
         </el-descriptions-item>
         <el-descriptions-item label="状态">
           <span class="status-badge" :class="currentEmployee?.status">
@@ -360,10 +400,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, Refresh, Edit, Delete, Key, Switch, View, UserFilled, CircleCheck, CircleClose, TrendCharts } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
+import request from '@/api/request'
 import {
   getEmployeeList,
   createEmployee,
@@ -374,6 +415,9 @@ import {
   getEmployeeStats,
   batchActionEmployees
 } from '@/api/employee'
+import { useUserStore } from '@/store/user'
+
+const userStore = useUserStore()
 
 const loading = ref(false)
 const employeeList = ref([])
@@ -385,6 +429,7 @@ const isEdit = ref(false)
 const submitLoading = ref(false)
 const formRef = ref(null)
 const currentEmployee = ref(null)
+const hasIdCard = ref(false)
 
 const statistics = reactive({
   total: 0,
@@ -409,34 +454,41 @@ const formData = reactive({
   username: '',
   password: '',
   name: '',
+  id_card: '',
   phone: '',
   email: '',
   position: '',
   role: 'staff',
-  status: 'active'
+  status: 'active',
+  avatar: ''
 })
 
-const formRules = {
-  username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 50, message: '用户名长度在 3 到 50 个字符', trigger: 'blur' }
-  ],
-  password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码长度不能少于 6 个字符', trigger: 'blur' }
-  ],
-  name: [
-    { required: true, message: '请输入姓名', trigger: 'blur' }
+// 动态表单验证规则
+const formRules = computed(() => ({
+  username: isEdit.value
+    ? [{ min: 3, max: 50, message: '用户名长度在 3 到 50 个字符', trigger: 'blur' }]
+    : [
+        { required: true, message: '请输入用户名', trigger: 'blur' },
+        { min: 3, max: 50, message: '用户名长度在 3 到 50 个字符', trigger: 'blur' }
+      ],
+  password: isEdit.value
+    ? []
+    : [
+        { required: true, message: '请输入密码', trigger: 'blur' },
+        { min: 6, message: '密码长度不能少于 6 个字符', trigger: 'blur' }
+      ],
+  name: [],
+  id_card: [
+    { pattern: /^[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]$/, message: '请输入正确的18位身份证号', trigger: 'blur' }
   ],
   phone: [
-    { required: true, message: '请输入手机号', trigger: 'blur' },
     { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }
   ],
   email: [
     { type: 'email', message: '请输入正确的邮箱地址', trigger: 'blur' }
   ],
   role: []
-}
+}))
 
 const passwordDialogVisible = ref(false)
 const passwordLoading = ref(false)
@@ -489,6 +541,15 @@ const getStatusText = (status) => {
 
 const formatDate = (date) => {
   return date ? dayjs(date).format('YYYY-MM-DD HH:mm') : '-'
+}
+
+const maskIdCard = (idCard) => {
+  if (!idCard) return '-'
+  // 身份证号脱敏：保留前3位和后4位，中间用*代替
+  if (idCard.length >= 8) {
+    return idCard.substring(0, 3) + '***********' + idCard.substring(idCard.length - 4)
+  }
+  return idCard
 }
 
 const fetchStatistics = async () => {
@@ -552,11 +613,61 @@ const resetForm = () => {
   formData.username = ''
   formData.password = ''
   formData.name = ''
+  formData.id_card = ''
   formData.phone = ''
   formData.email = ''
   formData.position = ''
   formData.role = 'staff'
   formData.status = 'active'
+  formData.avatar = ''
+}
+
+const beforePhotoUpload = (file) => {
+  const isJPG = file.type === 'image/jpeg' || file.type === 'image/png'
+  const isLt2M = file.size / 1024 / 1024 < 2
+
+  if (!isJPG) {
+    ElMessage.error('只能上传 JPG 或 PNG 格式的图片!')
+  }
+  if (!isLt2M) {
+    ElMessage.error('图片大小不能超过 2MB!')
+  }
+
+  return isJPG && isLt2M
+}
+
+const handlePhotoUpload = async (options) => {
+  const { file, onSuccess, onError } = options
+  
+  try {
+    const uploadFormData = new FormData()
+    uploadFormData.append('files', file)
+    uploadFormData.append('file_type', 'image')
+    
+    const res = await request({
+      url: '/upload',
+      method: 'post',
+      data: uploadFormData
+    })
+    
+    if (res.success) {
+      formData.avatar = res.data?.files?.[0]?.file_url || res.data?.uploaded_files?.[0]?.file_url
+      ElMessage.success('头像上传成功')
+      onSuccess(res)
+    } else {
+      ElMessage.error(res.message || '头像上传失败')
+      onError(res)
+    }
+  } catch (error) {
+    console.error('头像上传失败:', error)
+    ElMessage.error('头像上传失败')
+    onError(error)
+  }
+}
+
+const handlePhotoDelete = () => {
+  formData.avatar = ''
+  ElMessage.success('头像已删除')
 }
 
 const handleAdd = () => {
@@ -574,15 +685,18 @@ const handleView = (row) => {
 const handleEdit = (row) => {
   isEdit.value = true
   dialogTitle.value = '编辑员工'
+  hasIdCard.value = !!(row.id_card && row.id_card.length > 0)
   Object.assign(formData, {
     id: row.id,
     username: row.username,
     name: row.name,
+    id_card: row.id_card || '',
     phone: row.phone,
     email: row.email,
     position: row.position,
     role: row.role,
-    status: row.status
+    status: row.status,
+    avatar: row.avatar || ''
   })
   dialogVisible.value = true
 }
@@ -598,6 +712,10 @@ const handleSubmit = async () => {
       if (isEdit.value) {
         await updateEmployee(formData.id, formData)
         ElMessage.success('更新成功')
+        
+        if (userStore.userInfo.id === formData.id) {
+          userStore.updateUserInfo({ avatar: formData.avatar })
+        }
       } else {
         await createEmployee(formData)
         ElMessage.success('创建成功')
@@ -1025,12 +1143,15 @@ onMounted(() => {
   .action-buttons {
     display: flex;
     justify-content: center;
-    gap: 4px;
-    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
+    white-space: nowrap;
     
     .el-button {
-      padding: 4px 8px;
+      padding: 4px 6px;
       font-size: 12px;
+      flex-shrink: 0;
       
       .el-icon {
         margin-right: 2px;
@@ -1066,9 +1187,82 @@ onMounted(() => {
     border-top: 1px solid var(--border-secondary);
   }
   
-  :deep(.el-descriptions__label) {
-    font-weight: 500;
-    width: 120px;
+  .detail-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 20px;
+    background: linear-gradient(135deg, rgba(15, 118, 110, 0.05) 0%, rgba(20, 184, 166, 0.05) 100%);
+    border-radius: 12px;
+    margin-bottom: 20px;
+    
+    .detail-avatar {
+      flex-shrink: 0;
+      
+      .avatar-image {
+        width: 80px;
+        height: 80px;
+        border-radius: 12px;
+        object-fit: cover;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      }
+      
+      .avatar-placeholder {
+        width: 80px;
+        height: 80px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 32px;
+        font-weight: 600;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      }
+    }
+    
+    .detail-basic-info {
+      flex: 1;
+      
+      .detail-name {
+        font-size: 20px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin: 0 0 4px 0;
+      }
+      
+      .detail-position {
+        font-size: 14px;
+        color: var(--text-muted);
+        margin: 0 0 8px 0;
+      }
+      
+      .role-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 500;
+        
+        &.admin {
+          background: rgba(220, 38, 38, 0.1);
+          color: #DC2626;
+        }
+        
+        &.staff {
+          background: rgba(15, 118, 110, 0.1);
+          color: #0F766E;
+        }
+      }
+    }
+  }
+  
+  .detail-descriptions {
+    :deep(.el-descriptions__label) {
+      font-weight: 500;
+      width: 120px;
+    }
   }
   
   .dialog-footer {
@@ -1148,15 +1342,65 @@ onMounted(() => {
   }
   
   .form-content {
-    :deep(.el-form-item) {
-      margin-bottom: 20px;
-      
-      .el-form-item__label {
-        font-weight: 500;
-        color: var(--text-regular);
-      }
+  :deep(.el-form-item) {
+    margin-bottom: 20px;
+    
+    .el-form-item__label {
+      font-weight: 500;
+      color: var(--text-regular);
     }
   }
+  
+  .upload-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .form-tip {
+    font-size: 12px;
+    color: var(--text-secondary, #909399);
+    margin-top: 4px;
+  }
+  
+  .avatar-uploader {
+    border: 1px dashed var(--border-secondary);
+    border-radius: 8px;
+    padding: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    
+    &:hover {
+      border-color: var(--color-primary);
+      background-color: rgba(15, 118, 110, 0.05);
+    }
+  }
+  
+  .avatar {
+    width: 120px;
+    height: 120px;
+    border-radius: 8px;
+    object-fit: cover;
+  }
+  
+  .avatar-uploader-icon {
+    font-size: 32px;
+    color: var(--text-muted);
+  }
+  
+  .delete-photo-btn {
+    width: 120px;
+    margin-top: 4px;
+    color: var(--color-danger);
+    
+    &:hover {
+      color: var(--color-danger-dark);
+    }
+  }
+}
   
   .dialog-footer {
     display: flex;

@@ -66,8 +66,8 @@ class User(BaseModel):
     # 关系：员工负责的房源（录入人/负责人）
     # 使用 back_populates 与 House.owner 建立双向关系
     houses = db.relationship('House', back_populates='owner', lazy='dynamic', foreign_keys='House.owner_id')
-    uploaded_media = db.relationship('Media', lazy='dynamic', foreign_keys='Media.uploaded_by')
-    operated_payments = db.relationship('Payment', lazy='dynamic', foreign_keys='Payment.operator_id')
+    uploaded_media = db.relationship('Media', lazy='dynamic', foreign_keys='Media.uploaded_by', overlaps='uploader')
+    operated_payments = db.relationship('Payment', lazy='dynamic', foreign_keys='Payment.operator_id', overlaps='operator')
     
     # 员工管理关系（记录哪个管理员创建的员工）
     created_employees = db.relationship('User', lazy='select', foreign_keys='User.created_by', remote_side='User.id', backref='creator')
@@ -99,9 +99,39 @@ class User(BaseModel):
             return permission in ['view', 'create', 'edit']
         return False
     
-    def set_password(self, password):
-        """设置密码"""
+    def set_password(self, password, expires_days=None):
+        """
+        设置密码
+
+        Args:
+            password: 明文密码
+            expires_days: 密码过期天数（可选，默认使用配置中的值）
+        """
+        from flask import current_app
+        from .password_history import PasswordHistory
+
+        # 设置密码哈希
         self.password_hash = generate_password_hash(password)
+
+        # 检查是否启用密码历史记录，且 user.id 已存在
+        keep_count = current_app.config.get('PASSWORD_HISTORY_COUNT', 5)
+
+        # 如果 keep_count 为 0，跳过密码历史记录（用于测试环境）
+        # 如果 self.id 为 None，也跳过密码历史记录（需要在数据库插入后才能添加）
+        if keep_count > 0 and self.id is not None:
+            # 获取密码过期天数
+            if expires_days is None:
+                expires_days = current_app.config.get('PASSWORD_EXPIRE_DAYS', 90)
+
+            # 添加密码历史记录
+            PasswordHistory.add_password_history(
+                user_id=self.id,
+                password=password,
+                expires_days=expires_days
+            )
+
+            # 清理旧的密码历史记录
+            PasswordHistory.cleanup_old_passwords(user_id=self.id, keep_count=keep_count)
     
     def check_password(self, password):
         """验证密码"""
@@ -162,8 +192,13 @@ class User(BaseModel):
         """转换为字典"""
         data = super().to_dict()
         data.pop('password_hash', None)  # 移除密码字段
-        data.pop('id_card', None)  # 移除身份证号
         data.pop('id_card_hash', None)  # 移除身份证号哈希
+        
+        # 身份证号脱敏处理：保留前3位和后4位
+        if self.id_card and len(self.id_card) >= 8:
+            data['id_card'] = self.id_card[:3] + '***********' + self.id_card[-4:]
+        else:
+            data['id_card'] = None
         
         if not include_details:
             # 默认响应不包含敏感信息

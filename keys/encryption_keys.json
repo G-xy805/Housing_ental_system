@@ -1,0 +1,12 @@
+{
+  "keys": {
+    "key_20260304105759_de53730e": {
+      "key": "qBupwyd/t5XwvBf1h6tGQNEhckHK0PLYIozMzWm9SxA=",
+      "created_at": "2026-03-04T10:57:59.306538",
+      "expires_at": "2026-06-02T10:57:59.306543",
+      "is_primary": true
+    }
+  },
+  "current_key_id": "key_20260304105759_de53730e",
+  "last_updated": "2026-03-04T10:57:59.308342"
+}
