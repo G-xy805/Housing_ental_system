@@ -612,6 +612,18 @@ def upload_house_files(house_id: int):
         # 获取是否设为封面
         is_cover = request.form.get('is_cover', 'false').lower() == 'true'
         
+        # 获取描述参数
+        description = request.form.get('description', None)
+        
+        # 获取排序参数（基础排序值，会加上当前最大值）
+        sort_order_base = 0
+        sort_order_str = request.form.get('sort_order', None)
+        if sort_order_str is not None:
+            try:
+                sort_order_base = int(sort_order_str)
+            except ValueError:
+                pass  # 如果转换失败，使用默认值 0
+        
         # 如果设为封面，先取消其他封面
         if is_cover:
             Media.query.filter_by(house_id=house_id, is_cover=True).update({'is_cover': False})
@@ -678,7 +690,8 @@ def upload_house_files(house_id: int):
                 file_size=file_size,
                 mime_type=mime_type,
                 house_id=house_id,
-                sort_order=max_sort + idx + 1,
+                description=description,
+                sort_order=max_sort + sort_order_base + idx + 1,
                 is_cover=(is_cover and idx == 0)  # 第一个文件且指定了 is_cover
             )
             

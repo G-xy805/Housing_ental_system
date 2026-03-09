@@ -2,9 +2,10 @@
 房屋租赁系统 - Flask 应用初始化
 """
 import os
+import sys
 import logging
 from logging.handlers import RotatingFileHandler
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory, send_file
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -12,6 +13,44 @@ from sqlalchemy import event
 from sqlalchemy.pool import Pool
 
 from .config import config
+
+
+def get_static_folder():
+    """
+    获取前端静态文件目录
+    
+    Returns:
+        静态文件目录路径
+    """
+    # 检测是否在 PyInstaller 打包模式下运行
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后，静态文件位于 sys._MEIPASS/static 目录
+        base_path = sys._MEIPASS
+        static_folder = os.path.join(base_path, 'static')
+    else:
+        # 开发模式或生产模式，使用项目根目录的 dist/static 目录
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        static_folder = os.path.join(base_path, 'dist', 'static')
+    
+    return static_folder
+
+
+def get_frontend_dist_folder():
+    """
+    获取前端构建产物目录（包含 index.html）
+    
+    Returns:
+        前端构建产物目录路径
+    """
+    # 检测是否在 PyInstaller 打包模式下运行
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后，index.html 位于 sys._MEIPASS/static 目录
+        base_path = sys._MEIPASS
+        return os.path.join(base_path, 'static')
+    else:
+        # 开发模式或生产模式，index.html 位于 dist 目录
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base_path, 'dist')
 
 
 # 初始化扩展
@@ -41,7 +80,12 @@ def create_app(config_name=None):
     if config_name is None:
         config_name = os.getenv('FLASK_ENV', 'development')
     
-    app = Flask(__name__)
+    # 获取静态文件目录（用于 PyInstaller 打包模式）
+    static_folder = get_static_folder()
+    
+    # 创建 Flask 应用，指定静态文件目录
+    # 在 PyInstaller 打包模式下，静态文件位于 _internal/static 目录
+    app = Flask(__name__, static_folder=static_folder, static_url_path='/static')
     
     # 加载配置
     app.config.from_object(config[config_name])
@@ -63,6 +107,9 @@ def create_app(config_name=None):
     
     # 注册蓝图
     register_blueprints(app)
+    
+    # 注册前端静态文件路由（生产模式和 PyInstaller 打包模式）
+    register_frontend_routes(app)
     
     # 配置日志
     setup_logging(app)
@@ -106,12 +153,19 @@ def init_extensions(app):
     from app.utils.async_audit import init_async_audit
     init_async_audit(app)
     
+    # 初始化启动任务
+    from app.utils.startup_tasks import init_startup_tasks
+    init_startup_tasks(app)
+    
     # CORS
     CORS(app, resources={
         r"/api/*": {
             "origins": app.config['CORS_ORIGINS'],
-            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"]
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+            "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
+            "expose_headers": ["Content-Type", "X-Total-Count"],
+            "supports_credentials": True,
+            "max_age": 3600
         }
     })
     
@@ -377,6 +431,18 @@ def register_blueprints(app):
     # 注册审计日志蓝图
     from app.routes.audit import audit_bp
     app.register_blueprint(audit_bp)
+    
+    # 注册押金退款蓝图
+    from app.routes.deposit_refunds import deposit_refunds_bp
+    app.register_blueprint(deposit_refunds_bp)
+    
+    # 注册通知管理蓝图
+    from app.routes.notifications import notifications_bp
+    app.register_blueprint(notifications_bp)
+    
+    # 注册启动任务蓝图
+    from app.routes.startup_tasks import startup_tasks_bp
+    app.register_blueprint(startup_tasks_bp, url_prefix='/api/startup-tasks')
     
     # 注册健康检查端点
     @app.route('/api/health', methods=['GET'])
@@ -684,9 +750,72 @@ def register_blueprints(app):
                 'upload': '/api/upload',
                 'statistics': '/api/statistics',
                 'backup': '/api/backup',
-                'audit': '/api/audit (审计日志)'
+                'audit': '/api/audit (审计日志)',
+                'startup_tasks': '/api/startup-tasks (启动任务)'
             }
         })
+
+
+def register_frontend_routes(app):
+    """
+    注册前端静态文件路由和 SPA 路由回退
+    
+    在生产模式和 PyInstaller 打包模式下，Flask 需要托管前端构建产物。
+    所有非 /api/* 和非静态文件的请求都返回 index.html，让前端路由处理页面导航。
+    """
+    static_folder = get_static_folder()
+    frontend_dist = get_frontend_dist_folder()
+    index_path = os.path.join(frontend_dist, 'index.html')
+    
+    # 检查静态文件目录是否存在
+    if not os.path.exists(static_folder):
+        app.logger.warning(f'前端静态文件目录不存在: {static_folder}，跳过前端路由注册')
+        return
+    
+    if not os.path.exists(index_path):
+        app.logger.warning(f'前端入口文件不存在: {index_path}，跳过前端路由注册')
+        return
+    
+    app.logger.info(f'前端静态文件目录: {static_folder}')
+    app.logger.info(f'前端入口文件: {index_path}')
+    
+    # 静态资源路由 - /assets/* 指向前端 assets 目录
+    @app.route('/assets/<path:filename>')
+    def serve_assets(filename):
+        """提供前端 assets 静态资源"""
+        assets_path = os.path.join(static_folder, 'assets')
+        return send_from_directory(assets_path, filename)
+    
+    # 根路径 - 返回 index.html
+    @app.route('/')
+    def serve_index():
+        """提供前端入口页面"""
+        return send_file(index_path)
+    
+    # SPA 路由回退 - 所有非 API 和非静态文件的请求返回 index.html
+    @app.route('/<path:path>')
+    def serve_spa(path):
+        """
+        SPA 路由回退处理
+        
+        对于前端路由（如 /dashboard, /houses 等），返回 index.html 让前端路由处理。
+        排除 /api/* 路由和静态文件请求。
+        """
+        # 处理静态文件请求
+        if '.' in os.path.basename(path):
+            # 如果路径以 static/ 开头，去掉这个前缀
+            # 因为 static_folder 已经是 _internal/static 目录
+            if path.startswith('static/'):
+                relative_path = path[7:]  # 去掉 'static/' 前缀
+            else:
+                relative_path = path
+            
+            file_path = os.path.join(static_folder, relative_path)
+            if os.path.exists(file_path) and os.path.isfile(file_path):
+                return send_from_directory(static_folder, relative_path)
+        
+        # 对于前端路由，返回 index.html
+        return send_file(index_path)
 
 
 def setup_monitoring_system(app):
@@ -735,7 +864,32 @@ def setup_monitoring_system(app):
         )
         
     except Exception as e:
-        app.logger.error(f'监控与可观测性系统初始化失败: {str(e)}')
+        # 捕获 resource 模块错误（Windows 系统上不存在）
+        if "module 'resource' has no attribute 'getpagesize'" in str(e):
+            app.logger.warning('监控与可观测性系统初始化部分失败（Windows 系统不支持 resource 模块），但核心功能仍将启用')
+            # 尝试单独注册监控蓝图和初始化核心组件，确保API端点可用
+            try:
+                # 初始化健康检查器（基本功能）
+                from app.utils.health_check import setup_health_checker
+                setup_health_checker(app, db)
+                
+                # 初始化性能监控器（基本功能）
+                from app.utils.performance_monitor import setup_performance_monitor
+                setup_performance_monitor(app)
+                
+                # 初始化告警管理器
+                from app.utils.alerting import setup_alert_manager
+                setup_alert_manager(app)
+                
+                # 注册监控蓝图
+                from app.routes.monitoring import monitoring_bp
+                app.register_blueprint(monitoring_bp, url_prefix='/api/monitoring')
+                
+                app.logger.info('监控蓝图已注册，核心监控组件已初始化，API 端点可用')
+            except Exception as init_error:
+                app.logger.error(f'监控组件初始化失败: {str(init_error)}')
+        else:
+            app.logger.error(f'监控与可观测性系统初始化失败: {str(e)}')
 
 
 def _integrate_pool_monitoring(app):

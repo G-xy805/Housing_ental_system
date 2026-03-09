@@ -2,6 +2,7 @@
 应用配置模块
 """
 import os
+import sys
 from datetime import timedelta
 from dotenv import load_dotenv
 
@@ -9,17 +10,35 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def get_base_dir():
+    """
+    获取应用基础目录。
+    
+    在 PyInstaller 打包模式下返回 exe 所在目录，
+    在开发模式下返回项目根目录。
+    
+    Returns:
+        str: 基础目录路径
+    """
+    # 检查是否在 PyInstaller 打包模式下运行
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包模式：返回 exe 所在目录
+        return os.path.dirname(sys.executable)
+    else:
+        # 开发模式：返回项目根目录
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 class Config:
     """基础配置类"""
     
     # 基础配置
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    BASE_DIR = get_base_dir()
     
     # 安全配置
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
     
     # 数据库配置
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     DATABASE_URI = os.getenv('DATABASE_URI', f'sqlite:///{os.path.join(BASE_DIR, "housing_rental.db")}')
     SQLALCHEMY_DATABASE_URI = DATABASE_URI  # Flask-SQLAlchemy 需要这个
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -46,7 +65,7 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES = int(os.getenv('JWT_ACCESS_TOKEN_EXPIRES', 3600))
     
     # CORS 配置
-    CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://localhost:5173').split(',')
+    CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',')
     
     # 文件上传配置
     UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
@@ -203,6 +222,12 @@ class Config:
     ALERT_EMAIL_RECIPIENTS = os.getenv('ALERT_EMAIL_RECIPIENTS', '').split(',') if os.getenv('ALERT_EMAIL_RECIPIENTS') else []
     ALERT_WEBHOOK_ENABLED = os.getenv('ALERT_WEBHOOK_ENABLED', 'False').lower() == 'true'
     ALERT_WEBHOOK_URL = os.getenv('ALERT_WEBHOOK_URL', '')
+    
+    # 启动任务配置
+    STARTUP_TASKS_ENABLED = os.getenv('STARTUP_TASKS_ENABLED', 'True').lower() == 'true'
+    STARTUP_TASKS_BATCH_SIZE = int(os.getenv('STARTUP_TASKS_BATCH_SIZE', 100))
+    STARTUP_TASKS_TIMEOUT = int(os.getenv('STARTUP_TASKS_TIMEOUT', 60))
+    STARTUP_TASKS_DELAY = int(os.getenv('STARTUP_TASKS_DELAY', 100))
 
 
 class DevelopmentConfig(Config):
@@ -213,11 +238,52 @@ class DevelopmentConfig(Config):
 
 class ProductionConfig(Config):
     """生产环境配置"""
+    
+    # 生产环境基础配置
     DEBUG = False
     ENV = 'production'
     
-    # 生产环境需要更严格的配置
+    # 禁用调试相关的敏感信息输出
     SQLALCHEMY_ECHO = False
+
+
+# 生产环境路径配置（支持 PyInstaller 打包）
+# 在类定义后设置，确保路径动态计算
+def _init_production_paths():
+    """初始化生产环境路径配置"""
+    base_dir = get_base_dir()
+    
+    # 数据库路径：{base_dir}/data/housing_rental.db
+    db_dir = os.path.join(base_dir, 'data')
+    os.makedirs(db_dir, exist_ok=True)
+    ProductionConfig.SQLALCHEMY_DATABASE_URI = f'sqlite:///{os.path.join(db_dir, "housing_rental.db")}'
+    ProductionConfig.DATABASE_URI = ProductionConfig.SQLALCHEMY_DATABASE_URI
+    
+    # 上传目录：{base_dir}/uploads
+    upload_dir = os.path.join(base_dir, 'uploads')
+    os.makedirs(upload_dir, exist_ok=True)
+    ProductionConfig.UPLOAD_FOLDER = upload_dir
+    
+    # 备份目录：{base_dir}/backups
+    backup_dir = os.path.join(base_dir, 'backups')
+    os.makedirs(backup_dir, exist_ok=True)
+    ProductionConfig.BACKUP_FOLDER = backup_dir
+    
+    # 日志目录：{base_dir}/logs
+    log_dir = os.path.join(base_dir, 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+    ProductionConfig.LOG_FILE = os.path.join(log_dir, 'app.log')
+    ProductionConfig.SLOW_QUERY_LOG_FILE = os.path.join(log_dir, 'slow_queries.log')
+    ProductionConfig.ENCRYPTION_AUDIT_LOG_FILE = os.path.join(log_dir, 'encryption_audit.log')
+    
+    # 密钥目录：{base_dir}/keys
+    key_dir = os.path.join(base_dir, 'keys')
+    os.makedirs(key_dir, exist_ok=True)
+    ProductionConfig.AES_KEY_STORAGE_PATH = key_dir
+
+
+# 初始化生产环境路径
+_init_production_paths()
 
 
 class TestingConfig(Config):

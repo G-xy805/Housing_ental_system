@@ -641,6 +641,8 @@ def get_tenant_statistics():
         long_term = 0  # 大于 12 个月
         
         for contract in active_contracts:
+            if not contract.end_date or not contract.start_date:
+                continue
             duration_months = (contract.end_date.year - contract.start_date.year) * 12 + \
                             (contract.end_date.month - contract.start_date.month)
             
@@ -676,6 +678,8 @@ def get_tenant_statistics():
         renewed_count = 0
         for contract in expired_contracts:
             # 检查该租客是否有后续合同
+            if not contract.end_date or not contract.tenant_id:
+                continue
             subsequent_contract = Contract.query.filter(
                 Contract.tenant_id == contract.tenant_id,
                 Contract.start_date > contract.end_date,
@@ -692,8 +696,8 @@ def get_tenant_statistics():
         # 平均租期
         avg_duration_query = db.session.query(
             func.avg(
-                (cast(func.strftime('%J', Contract.end_date), Numeric) - 
-                 cast(func.strftime('%J', Contract.start_date), Numeric)) / 30
+                (func.julianday(Contract.end_date) - 
+                 func.julianday(Contract.start_date)) / 30
             )
         ).filter(
             Contract.status.in_(['active', 'expired'])
@@ -789,8 +793,8 @@ def get_contract_statistics():
                 'contract_no': contract.contract_no,
                 'title': contract.title,
                 'tenant_name': contract.tenant_rel.name if contract.tenant_rel else None,
-                'end_date': contract.end_date.isoformat(),
-                'days_until_expiry': (contract.end_date - end_date).days
+                'end_date': contract.end_date.isoformat() if contract.end_date else None,
+                'days_until_expiry': (contract.end_date - end_date).days if contract.end_date else None
             })
         
         result['expiring_soon'] = {
@@ -804,6 +808,9 @@ def get_contract_statistics():
         
         renewed_count = 0
         for contract in expired_contracts_list:
+            # 检查该租客是否有后续合同
+            if not contract.end_date or not contract.tenant_id:
+                continue
             subsequent_contract = Contract.query.filter(
                 Contract.tenant_id == contract.tenant_id,
                 Contract.start_date > contract.end_date,
@@ -819,8 +826,8 @@ def get_contract_statistics():
         # 平均租期（月）
         avg_duration_query = db.session.query(
             func.avg(
-                (cast(func.strftime('%J', Contract.end_date), Numeric) - 
-                 cast(func.strftime('%J', Contract.start_date), Numeric)) / 30
+                (func.julianday(Contract.end_date) - 
+                 func.julianday(Contract.start_date)) / 30
             )
         ).filter(
             Contract.status.in_(['active', 'expired'])
@@ -1747,13 +1754,15 @@ def get_expiring_contracts():
     try:
         days = request.args.get('days', 30, type=int)
         
-        today = date.today()
-        end_date = today + timedelta(days=days)
+        # 使用SQLAlchemy的func.current_date()进行日期比较
+        from sqlalchemy import func
+        
+        end_date = date.today() + timedelta(days=days)
         
         # 查询即将到期的合同
         expiring_contracts = Contract.query.filter(
             Contract.status == 'active',
-            Contract.end_date >= today,
+            Contract.end_date >= func.current_date(),
             Contract.end_date <= end_date
         ).order_by(Contract.end_date).all()
         
@@ -1764,7 +1773,7 @@ def get_expiring_contracts():
                 'contract_no': contract.contract_no,
                 'title': contract.title,
                 'end_date': contract.end_date.isoformat(),
-                'days_until_expiry': (contract.end_date - today).days,
+                'days_until_expiry': (contract.end_date - date.today()).days,
                 'status': contract.status,
                 'rent_amount': contract.rent_amount
             }

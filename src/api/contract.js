@@ -114,4 +114,16 @@ export function getContractPayments(id, params) {
   return request.get(`/contracts/${id}/payments`, { params })
 }
 
+/**
+ * 批量更新合同状态
+ * @param {Object} data 批量更新数据
+ * @param {Array} data.ids 合同ID列表
+ * @param {string} data.status 新状态
+ * @param {string} data.reason 终止原因（可选）
+ * @returns {Promise}
+ */
+export function batchUpdateStatus(data) {
+  return request.post('/contracts/batch-update-status', data)
+}
+
 

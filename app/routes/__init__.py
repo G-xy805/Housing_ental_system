@@ -15,6 +15,7 @@ from app.routes.users import users_bp
 from app.routes.landlord_contracts import landlord_contracts_bp
 from app.routes.public_houses import public_houses_bp
 from app.routes.audit import audit_bp
+from app.routes.notifications import notifications_bp
 
 __all__ = [
     'auth_bp', 
@@ -30,5 +31,6 @@ __all__ = [
     'landlord_contracts_bp',
     'public_houses_bp',
     'audit_bp',
+    'notifications_bp',
     'init_auto_backup'
 ]

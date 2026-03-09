@@ -15,8 +15,9 @@
       </el-form-item>
 
       <el-form-item label="租赁类型" prop="rental_type">
-        <el-select v-model="formData.rental_type" placeholder="请选择租赁类型" style="width: 100%" disabled>
+        <el-select v-model="formData.rental_type" placeholder="请选择租赁类型" style="width: 100%" :disabled="isEdit">
           <el-option label="整租" value="whole" />
+          <el-option label="合租" value="shared" />
         </el-select>
       </el-form-item>
 
@@ -74,39 +75,44 @@
         <el-input v-model="formData.contact_wechat" placeholder="请输入房东微信（可选）" maxlength="50" show-word-limit disabled />
       </el-form-item>
 
-      <!-- 房屋信息 -->
-      <el-divider content-position="left">房屋信息</el-divider>
+      <!-- 房屋信息（整租特有） -->
+      <el-divider content-position="left" v-if="formData.rental_type === 'whole'">房屋信息</el-divider>
 
-      <el-form-item label="租金 (元/月)" prop="rent_price">
-        <el-input-number
-          v-model="formData.rent_price"
-          :min="0"
-          :precision="2"
-          :step="100"
-          placeholder="请输入租金"
-          style="width: 100%"
-        />
-      </el-form-item>
+      <template v-if="formData.rental_type === 'whole'">
+        <el-form-item label="租金 (元/月)" prop="rent_price">
+          <el-input-number
+            v-model="formData.rent_price"
+            :min="0"
+            :precision="2"
+            :step="100"
+            placeholder="请输入租金"
+            style="width: 100%"
+          />
+        </el-form-item>
 
-      <el-form-item label="押金 (元)" prop="deposit">
-        <el-input-number
-          v-model="formData.deposit"
-          :min="0"
-          :precision="2"
-          :step="100"
-          placeholder="请输入押金"
-          style="width: 100%"
-        />
-      </el-form-item>
+        <el-form-item label="押金 (元)" prop="deposit">
+          <el-input-number
+            v-model="formData.deposit"
+            :min="0"
+            :precision="2"
+            :step="100"
+            placeholder="请输入押金"
+            style="width: 100%"
+          />
+        </el-form-item>
 
-      <el-form-item label="付款方式" prop="payment_method">
-        <el-select v-model="formData.payment_method" placeholder="请选择付款方式" style="width: 100%">
-          <el-option label="押一付三" value="press1_pay3" />
-          <el-option label="押一付一" value="press1_pay1" />
-          <el-option label="押二付三" value="press2_pay3" />
-          <el-option label="面议" value="negotiable" />
-        </el-select>
-      </el-form-item>
+        <el-form-item label="付款方式" prop="payment_method">
+          <el-select v-model="formData.payment_method" placeholder="请选择付款方式" style="width: 100%">
+            <el-option label="押一付三" value="press1_pay3" />
+            <el-option label="押一付一" value="press1_pay1" />
+            <el-option label="押二付三" value="press2_pay3" />
+            <el-option label="面议" value="negotiable" />
+          </el-select>
+        </el-form-item>
+      </template>
+
+      <!-- 房屋基本信息（整租和合租共有） -->
+      <el-divider content-position="left">房屋基本信息</el-divider>
 
       <el-form-item label="建筑面积 (㎡)" prop="area">
         <el-input-number
@@ -210,9 +216,20 @@
       </el-form-item>
 
       <!-- 配套设施 -->
-      <el-divider content-position="left">配套设施</el-divider>
+      <el-divider content-position="left">
+        {{ formData.rental_type === 'shared' ? '公共配套设施' : '配套设施' }}
+      </el-divider>
 
-      <el-form-item label="配套设施" prop="amenities">
+      <el-form-item :label="formData.rental_type === 'shared' ? '公共配套设施' : '配套设施'" prop="amenities">
+        <div v-if="formData.rental_type === 'shared'" class="facilities-tip">
+          <el-alert
+            title="提示：此处配置的是公共区域设施（所有租户共享），房间内部设施请在「房间管理」中为每个房间单独配置"
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 12px"
+          />
+        </div>
         <el-checkbox-group v-model="formData.amenities">
           <el-row>
             <el-col :span="8" v-for="item in amenityOptions" :key="item.value">
@@ -237,6 +254,21 @@
           show-word-limit
         />
       </el-form-item>
+
+      <!-- 房间管理（仅合租时显示） -->
+      <el-divider content-position="left" v-if="formData.rental_type === 'shared'">房间管理</el-divider>
+
+      <div v-if="formData.rental_type === 'shared'" class="room-management">
+        <RoomList
+          v-model="rooms"
+          :house-id="formData.id || 'temp'"
+          :show-delete-button="true"
+          :is-new-house="!formData.id"
+          @add="handleAddRoom"
+          @edit="handleEditRoom"
+          @delete="handleDeleteRoom"
+        />
+      </div>
 
       <!-- 图片上传 -->
       <el-divider content-position="left">房源图片</el-divider>
@@ -282,6 +314,7 @@ import { ElMessage, ElLoading } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { uploadHouseImage, uploadImage, deleteMedia, setCoverImage } from '@/api/house'
 import { getLandlordList } from '@/api/landlord'
+import RoomList from './RoomList.vue'
 
 const props = defineProps({
   modelValue: {
@@ -369,8 +402,48 @@ const formRules = {
     { required: true, message: '请输入详细地址', trigger: 'blur' },
     { min: 5, message: '详细地址至少 5 个字符', trigger: 'blur' }
   ],
-  rent_price: [{ required: true, message: '请输入租金', trigger: 'blur' }],
-  deposit: [{ required: true, message: '请输入押金', trigger: 'blur' }],
+  rent_price: [
+    { 
+      required: true, 
+      message: '请输入租金', 
+      trigger: 'blur',
+      validator: (rule, value, callback) => {
+        if (formData.rental_type === 'whole' && (!value || value <= 0)) {
+          callback(new Error('请输入租金'))
+          return
+        }
+        callback()
+      }
+    }
+  ],
+  deposit: [
+    { 
+      required: true, 
+      message: '请输入押金', 
+      trigger: 'blur',
+      validator: (rule, value, callback) => {
+        if (formData.rental_type === 'whole' && (!value || value <= 0)) {
+          callback(new Error('请输入押金'))
+          return
+        }
+        callback()
+      }
+    }
+  ],
+  payment_method: [
+    { 
+      required: true, 
+      message: '请选择付款方式', 
+      trigger: 'change',
+      validator: (rule, value, callback) => {
+        if (formData.rental_type === 'whole' && !value) {
+          callback(new Error('请选择付款方式'))
+          return
+        }
+        callback()
+      }
+    }
+  ],
   area: [{ required: true, message: '请输入建筑面积', trigger: 'blur' }],
   room_count: [{ required: true, message: '请输入房间数', trigger: 'blur' }],
   floor: [{ required: true, message: '请输入楼层', trigger: 'blur' }],
@@ -406,6 +479,18 @@ const formRules = {
       validator: (rule, value, callback) => {
         if (!value || value.length === 0) {
           callback(new Error('请至少上传一张房源图片'))
+          return
+        }
+        callback()
+      },
+      trigger: 'change'
+    }
+  ],
+  rooms: [
+    {
+      validator: (rule, value, callback) => {
+        if (formData.rental_type === 'shared' && (!rooms.value || rooms.value.length === 0)) {
+          callback(new Error('合租类型至少需要添加一个房间'))
           return
         }
         callback()
@@ -451,6 +536,9 @@ watch(() => formData.images, (newImages) => {
 // 图片预览对话框
 const dialogVisible = ref(false)
 const dialogImageUrl = ref('')
+
+// 房间列表
+const rooms = ref([])
 
 // 获取房东列表
 async function fetchLandlordList() {
@@ -508,6 +596,13 @@ const initFormData = () => {
       amenities = Object.keys(props.modelValue.facilities).filter(key => props.modelValue.facilities[key])
     }
     
+    // 处理房间数据
+    if (Array.isArray(props.modelValue.rooms)) {
+      rooms.value = [...props.modelValue.rooms]
+    } else {
+      rooms.value = []
+    }
+    
     // 创建一个新的对象，确保数组是独立的
     const modelValueCopy = {
       ...props.modelValue,
@@ -537,6 +632,7 @@ const initFormData = () => {
   } else {
     Object.assign(formData, defaultFormData)
     selectedLandlordId.value = null
+    rooms.value = []
   }
 }
 
@@ -564,7 +660,6 @@ const beforeImageUpload = (file) => {
 const handleFileChange = (file, fileList) => {
   // 只处理文件状态变化，不添加图片到数组
   // 图片添加逻辑已在 handleImagesUpload 中处理
-  console.log('文件状态变化:', file.status)
 }
 
 // 处理图片集上传（仅在前端预览，不立即上传到服务器）
@@ -572,20 +667,16 @@ const handleImagesUpload = (options) => {
   const { file, onSuccess, onError } = options
   
   try {
-    console.log('开始上传图片:', file.name, '大小:', file.size)
-    
     // 使用本地预览，不立即上传到服务器
     const reader = new FileReader()
     reader.onload = (e) => {
       const localUrl = e.target.result
       // 添加到 formData.images，watch 会自动更新 imageFileList
       formData.images.push(localUrl)
-      console.log('图片已添加到预览:', localUrl)
       
       // 如果是第一张图片，自动设为封面
       if (formData.images.length === 1) {
         formData.cover_image = localUrl
-        console.log('自动设置第一张图片为封面:', localUrl)
       }
       
       ElMessage.success('图片已添加到预览')
@@ -712,6 +803,10 @@ const handleSubmit = async () => {
   try {
     // 将 selectedLandlordId 赋值给 formData.landlord_id 用于表单验证
     formData.landlord_id = selectedLandlordId.value
+    // 验证房间数据（如果是合租）
+    if (formData.rental_type === 'shared') {
+      await formRef.value.validateField('rooms')
+    }
     await formRef.value.validate()
     
     // 先提交房源基本数据（不含图片）
@@ -727,9 +822,8 @@ const handleSubmit = async () => {
       bathroom_count: formData.bathroom_count,
       floor: formData.floor,
       total_floors: formData.total_floors,
-      rent_price: formData.rent_price,
-      deposit: formData.deposit,
-      payment_method: formData.payment_method,
+      orientation: formData.orientation,
+      decoration: formData.decoration,
       rental_type: formData.rental_type,
       status: formData.status,
       facilities: Array.isArray(formData.amenities) 
@@ -741,10 +835,16 @@ const handleSubmit = async () => {
       landlord_id: selectedLandlordId.value,
       contact_name: formData.contact_name,
       contact_phone: formData.contact_phone,
-      contact_wechat: formData.contact_wechat
+      contact_wechat: formData.contact_wechat,
+      rooms: rooms.value
     }
     
-    console.log('提交基本数据:', basicData)
+    // 整租时才包含租金、押金、付款方式
+    if (formData.rental_type === 'whole') {
+      basicData.rent_price = formData.rent_price
+      basicData.deposit = formData.deposit
+      basicData.payment_method = formData.payment_method
+    }
     
     // 触发提交事件，等待父组件创建/更新房源
     const houseData = await new Promise((resolve, reject) => {
@@ -777,7 +877,6 @@ const handleSubmit = async () => {
       window._submitTimeoutId = null
     }
     
-    console.log('房源创建/更新成功:', houseData)
     const houseId = houseData.id
     
     // 检查是否有图片需要上传
@@ -809,8 +908,6 @@ const handleSubmit = async () => {
         }
         
         if (imagesToUpload.length > 0) {
-          console.log('需要上传的图片数量:', imagesToUpload.length)
-          
           // 转换 base64 为 File 对象并上传
           const uploadPromises = imagesToUpload.map(async (item, index) => {
             const blob = await fetch(item.url).then(res => res.blob())
@@ -828,7 +925,6 @@ const handleSubmit = async () => {
           })
           
           const uploadedUrls = await Promise.all(uploadPromises)
-          console.log('上传结果:', uploadedUrls)
           
           // 上传完成后刷新房源数据
           ElMessage.success('图片上传成功')
@@ -842,9 +938,6 @@ const handleSubmit = async () => {
         return false
       }
     }
-    
-    // 通知父组件刷新数据
-    emit('refresh')
   } catch (error) {
     console.error('提交失败:', error)
     // 清除超时定时器
@@ -871,6 +964,28 @@ const handleCancel = () => {
 const resetForm = () => {
   formRef.value?.resetFields()
   Object.assign(formData, defaultFormData)
+  rooms.value = []
+}
+
+// 处理添加房间
+const handleAddRoom = (roomData) => {
+  rooms.value.push(roomData)
+}
+
+// 处理编辑房间
+const handleEditRoom = (roomData) => {
+  const index = rooms.value.findIndex(room => room.id === roomData.id)
+  if (index !== -1) {
+    rooms.value[index] = roomData
+  }
+}
+
+// 处理删除房间
+const handleDeleteRoom = (roomData) => {
+  const index = rooms.value.findIndex(room => room.id === roomData.id)
+  if (index !== -1) {
+    rooms.value.splice(index, 1)
+  }
 }
 
 // 暴露方法给父组件
@@ -881,67 +996,328 @@ defineExpose({
 </script>
 
 <style lang="scss" scoped>
+// 设计变量
+$primary-color: #14b8a6; // Teal
+$primary-light: #5eead4;
+$primary-dark: #0d9488;
+$accent-color: #06b6d4; // Cyan
+$border-radius: 12px;
+$border-radius-lg: 16px;
+$transition-fast: 150ms;
+$transition-normal: 250ms;
+$transition-slow: 300ms;
+
 .house-form-container {
-  padding: 20px;
+  padding: 24px;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-radius: $border-radius-lg;
 
   .house-form {
     max-width: 800px;
     margin: 0 auto;
 
+    // 分隔线样式优化
+    :deep(.el-divider) {
+      margin: 32px 0 24px;
+
+      .el-divider__text {
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        font-weight: 600;
+        font-size: 15px;
+        color: $primary-dark;
+        padding: 0 16px;
+      }
+    }
+
+    // 表单项样式优化
+    :deep(.el-form-item) {
+      margin-bottom: 22px;
+      transition: all $transition-normal ease;
+
+      .el-form-item__label {
+        font-weight: 500;
+        color: #374151;
+        font-size: 14px;
+        transition: color $transition-fast ease;
+      }
+
+      &:focus-within {
+        .el-form-item__label {
+          color: $primary-color;
+        }
+      }
+    }
+
+    // 输入框聚焦效果
+    :deep(.el-input__wrapper),
+    :deep(.el-textarea__inner),
+    :deep(.el-select .el-input__wrapper) {
+      border-radius: $border-radius;
+      transition: all $transition-normal ease;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      border: 1px solid #e5e7eb;
+
+      &:hover {
+        border-color: $primary-light;
+        box-shadow: 0 2px 6px rgba(20, 184, 166, 0.1);
+      }
+
+      &.is-focus,
+      &:focus {
+        border-color: $primary-color;
+        box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.15), 0 2px 8px rgba(20, 184, 166, 0.2);
+      }
+    }
+
+    // 数字输入框样式
+    :deep(.el-input-number) {
+      width: 100%;
+
+      .el-input__wrapper {
+        border-radius: $border-radius;
+      }
+    }
+
+    // 下拉选择框样式
+    :deep(.el-select) {
+      width: 100%;
+
+      .el-select__wrapper {
+        border-radius: $border-radius;
+        transition: all $transition-normal ease;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e5e7eb;
+
+        &:hover {
+          border-color: $primary-light;
+          box-shadow: 0 2px 6px rgba(20, 184, 166, 0.1);
+        }
+
+        &.is-focused {
+          border-color: $primary-color;
+          box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.15), 0 2px 8px rgba(20, 184, 166, 0.2);
+        }
+      }
+    }
+
+    // 复选框组样式
+    :deep(.el-checkbox-group) {
+      .el-checkbox {
+        margin-right: 0;
+        margin-bottom: 12px;
+        padding: 10px 16px;
+        border-radius: $border-radius;
+        border: 1px solid #e5e7eb;
+        transition: all $transition-normal ease;
+        background: #fff;
+
+        &:hover {
+          border-color: $primary-light;
+          background: rgba(20, 184, 166, 0.04);
+          transform: translateY(-1px);
+          box-shadow: 0 2px 8px rgba(20, 184, 166, 0.1);
+        }
+
+        &.is-checked {
+          border-color: $primary-color;
+          background: rgba(20, 184, 166, 0.08);
+
+          .el-checkbox__label {
+            color: $primary-dark;
+            font-weight: 500;
+          }
+        }
+
+        .el-checkbox__input.is-checked .el-checkbox__inner {
+          background-color: $primary-color;
+          border-color: $primary-color;
+        }
+
+        .el-checkbox__input.is-checked + .el-checkbox__label {
+          color: $primary-dark;
+        }
+      }
+    }
+
+    // 提示框样式
+    :deep(.el-alert) {
+      border-radius: $border-radius;
+      border: 1px solid rgba(20, 184, 166, 0.2);
+      background: rgba(20, 184, 166, 0.06);
+
+      .el-alert__title {
+        color: $primary-dark;
+        font-size: 13px;
+      }
+    }
+
     .unit-label {
       margin-left: 10px;
-      color: #909399;
+      color: #6b7280;
+      font-size: 13px;
+      font-weight: 500;
     }
 
     .image-uploader {
       width: 148px;
       height: 148px;
-      border: 1px dashed #d9d9d9;
-      border-radius: 6px;
+      border: 2px dashed #d1d5db;
+      border-radius: $border-radius;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
+      transition: all $transition-normal ease;
+      background: #fff;
 
       &:hover {
-        border-color: #409eff;
+        border-color: $primary-color;
+        background: rgba(20, 184, 166, 0.04);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(20, 184, 166, 0.15);
+
+        .uploader-icon {
+          color: $primary-color;
+          transform: scale(1.1);
+        }
       }
 
       .uploaded-image {
         width: 100%;
         height: 100%;
         object-fit: cover;
+        border-radius: $border-radius - 2;
       }
 
       .uploader-icon {
-        font-size: 28px;
-        color: #8c939d;
+        font-size: 32px;
+        color: #9ca3af;
+        transition: all $transition-normal ease;
       }
     }
 
     .image-list-uploader {
       width: 100%;
 
-      :deep(.el-upload-list__item) {
-        transition: all 0.3s;
-      }
-
       :deep(.el-upload--picture-card) {
-        width: 100px;
-        height: 100px;
+        width: 104px;
+        height: 104px;
+        border: 2px dashed #d1d5db;
+        border-radius: $border-radius;
+        background: #fff;
+        transition: all $transition-normal ease;
+
+        &:hover {
+          border-color: $primary-color;
+          background: rgba(20, 184, 166, 0.04);
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(20, 184, 166, 0.15);
+
+          .el-icon {
+            color: $primary-color;
+            transform: scale(1.15);
+          }
+        }
+
+        .el-icon {
+          color: #9ca3af;
+          font-size: 24px;
+          transition: all $transition-normal ease;
+        }
       }
 
       :deep(.el-upload-list__item) {
-        width: 100px;
-        height: 100px;
+        width: 104px;
+        height: 104px;
+        border-radius: $border-radius;
+        transition: all $transition-normal ease;
+        border: 1px solid #e5e7eb;
+        overflow: hidden;
+
+        &:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+
+          .el-upload-list__item-actions {
+            opacity: 1;
+          }
+        }
+
+        img {
+          object-fit: cover;
+          border-radius: $border-radius - 2;
+        }
+      }
+
+      :deep(.el-upload-list__item-actions) {
+        opacity: 0;
+        transition: opacity $transition-fast ease;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: $border-radius - 2;
       }
     }
 
     .upload-tip {
-      margin-top: 10px;
-      font-size: 12px;
-      color: #909399;
-      line-height: 1.5;
+      margin-top: 12px;
+      font-size: 13px;
+      color: #6b7280;
+      line-height: 1.6;
+      padding: 10px 14px;
+      background: rgba(107, 114, 128, 0.06);
+      border-radius: $border-radius;
+      border-left: 3px solid $primary-light;
+    }
+
+    // 提交按钮样式
+    :deep(.el-form-item:last-child) {
+      margin-top: 32px;
+      padding-top: 24px;
+      border-top: 1px solid #e5e7eb;
+
+      .el-button {
+        min-width: 120px;
+        height: 44px;
+        border-radius: $border-radius;
+        font-weight: 500;
+        font-size: 15px;
+        transition: all $transition-normal ease;
+
+        &.el-button--primary {
+          background: linear-gradient(135deg, $primary-color 0%, $accent-color 100%);
+          border: none;
+          box-shadow: 0 2px 8px rgba(20, 184, 166, 0.3);
+
+          &:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(20, 184, 166, 0.4);
+          }
+
+          &:active {
+            transform: translateY(0);
+          }
+        }
+
+        &:not(.el-button--primary) {
+          border: 1px solid #d1d5db;
+          background: #fff;
+
+          &:hover {
+            border-color: $primary-light;
+            color: $primary-dark;
+            background: rgba(20, 184, 166, 0.04);
+          }
+        }
+      }
+    }
+
+    // 房间管理区域
+    .room-management {
+      margin-top: 16px;
+      padding: 20px;
+      background: #fff;
+      border-radius: $border-radius;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
     }
   }
 }

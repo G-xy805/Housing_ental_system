@@ -1,61 +1,283 @@
-// 全局样式变量
+// ========================================
+// 全局样式变量 - 房屋租赁系统设计系统
+// ========================================
 
-// 主题色
-$primary-color: #409eff;
-$success-color: #67c23a;
-$warning-color: #e6a23c;
-$danger-color: #f56c6c;
-$info-color: #909399;
+// ----------------------------------------
+// 主题色系 (Teal/Cyan - 房地产/物业管理主题)
+// ----------------------------------------
+$primary-color: #0F766E;
+$primary-light: #14B8A6;
+$primary-lighter: #5EEAD4;
+$primary-dark: #0D9488;
+$primary-darker: #115E59;
 
-// 文字颜色
-$text-primary: #303133;
-$text-regular: #606266;
-$text-secondary: #909399;
-$text-placeholder: #c0c4cc;
+// 次要色系 (Blue/Cyan)
+$secondary-color: #0369A1;
+$secondary-light: #0EA5E9;
+$secondary-lighter: #7DD3FC;
 
-// 背景色
-$bg-color: #f5f7fa;
-$bg-page: #ffffff;
+// ----------------------------------------
+// 语义色彩 (Semantic Colors)
+// ----------------------------------------
+// 成功色
+$success-color: #10B981;
+$success-light: #34D399;
+$success-lighter: #6EE7B7;
+$success-dark: #059669;
+$success-bg: #ECFDF5;
 
-// 边框颜色
-$border-color: #dcdfe6;
-$border-light: #e4e7ed;
+// 警告色
+$warning-color: #F59E0B;
+$warning-light: #FBBF24;
+$warning-lighter: #FCD34D;
+$warning-dark: #D97706;
+$warning-bg: #FFFBEB;
 
-// 字体大小
-$font-size-extra-large: 20px;
-$font-size-large: 18px;
-$font-size-medium: 16px;
-$font-size-base: 14px;
-$font-size-small: 13px;
-$font-size-extra-small: 12px;
+// 危险色
+$danger-color: #EF4444;
+$danger-light: #F87171;
+$danger-lighter: #FCA5A5;
+$danger-dark: #DC2626;
+$danger-bg: #FEF2F2;
 
-// 间距
-$spacing-base: 8px;
-$spacing-small: 12px;
-$spacing-medium: 16px;
-$spacing-large: 20px;
-$spacing-extra-large: 24px;
+// 信息色
+$info-color: #3B82F6;
+$info-light: #60A5FA;
+$info-lighter: #93C5FD;
+$info-dark: #2563EB;
+$info-bg: #EFF6FF;
 
-// 圆角
-$border-radius-base: 4px;
-$border-radius-medium: 6px;
-$border-radius-large: 8px;
-$border-radius-round: 20px;
+// ----------------------------------------
+// 中性色 (Neutral Colors)
+// ----------------------------------------
+$white: #FFFFFF;
+$black: #000000;
+$gray-50: #F9FAFB;
+$gray-100: #F3F4F6;
+$gray-200: #E5E7EB;
+$gray-300: #D1D5DB;
+$gray-400: #9CA3AF;
+$gray-500: #6B7280;
+$gray-600: #4B5563;
+$gray-700: #374151;
+$gray-800: #1F2937;
+$gray-900: #111827;
+
+// ----------------------------------------
+// 文字颜色 (Text Colors)
+// ----------------------------------------
+$text-primary: #134E4A;
+$text-secondary: #0F766E;
+$text-regular: #374151;
+$text-muted: #6B7280;
+$text-placeholder: #9CA3AF;
+$text-disabled: #D1D5DB;
+$text-inverse: #FFFFFF;
+
+// ----------------------------------------
+// 背景颜色 (Background Colors)
+// ----------------------------------------
+$bg-primary: #F0FDFA;
+$bg-secondary: #FFFFFF;
+$bg-tertiary: #F9FAFB;
+$bg-card: #FFFFFF;
+$bg-hover: #F3F4F6;
+$bg-active: #E5E7EB;
+$bg-overlay: rgba(0, 0, 0, 0.5);
+
+// ----------------------------------------
+// 边框颜色 (Border Colors)
+// ----------------------------------------
+$border-primary: #99F6E4;
+$border-secondary: #E5E7EB;
+$border-light: #F3F4F6;
+$border-focus: #0F766E;
+
+// ----------------------------------------
+// 字体系统 (Typography)
+// ----------------------------------------
+// 字体族
+$font-family-heading: 'Lexend', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+$font-family-body: 'Source Sans 3', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+$font-family-mono: 'JetBrains Mono', 'Consolas', monospace;
+
+// 字体大小 (基于 16px 基准)
+$font-size-xs: 0.75rem;    // 12px
+$font-size-sm: 0.875rem;   // 14px
+$font-size-base: 1rem;     // 16px
+$font-size-lg: 1.125rem;   // 18px
+$font-size-xl: 1.25rem;    // 20px
+$font-size-2xl: 1.5rem;    // 24px
+$font-size-3xl: 1.875rem;  // 30px
+$font-size-4xl: 2.25rem;   // 36px
+$font-size-5xl: 3rem;      // 48px
+$font-size-6xl: 3.75rem;   // 60px
+
+// 标题字号 (H1-H6 递减)
+$heading-1: $font-size-4xl;  // 36px
+$heading-2: $font-size-3xl;  // 30px
+$heading-3: $font-size-2xl;  // 24px
+$heading-4: $font-size-xl;   // 20px
+$heading-5: $font-size-lg;   // 18px
+$heading-6: $font-size-base; // 16px
+
+// 字重
+$font-weight-light: 300;
+$font-weight-normal: 400;
+$font-weight-medium: 500;
+$font-weight-semibold: 600;
+$font-weight-bold: 700;
+$font-weight-extrabold: 800;
+
+// 行高
+$line-height-tight: 1.25;
+$line-height-snug: 1.375;
+$line-height-normal: 1.5;
+$line-height-relaxed: 1.625;
+$line-height-loose: 2;
+
+// ----------------------------------------
+// 间距系统 (Spacing - 8px 基础单位)
+// ----------------------------------------
+$spacing-0: 0;
+$spacing-1: 0.25rem;   // 4px
+$spacing-2: 0.5rem;    // 8px  - 基础单位
+$spacing-3: 0.75rem;   // 12px
+$spacing-4: 1rem;      // 16px
+$spacing-5: 1.25rem;   // 20px
+$spacing-6: 1.5rem;    // 24px
+$spacing-8: 2rem;      // 32px
+$spacing-10: 2.5rem;   // 40px
+$spacing-12: 3rem;     // 48px
+$spacing-16: 4rem;     // 64px
+$spacing-20: 5rem;     // 80px
+$spacing-24: 6rem;     // 96px
+
+// 兼容旧变量名
+$spacing-base: $spacing-2;
+$spacing-small: $spacing-3;
+$spacing-medium: $spacing-4;
+$spacing-large: $spacing-5;
+$spacing-extra-large: $spacing-6;
+
+// ----------------------------------------
+// 圆角系统 (Border Radius - 12-16px 主范围)
+// ----------------------------------------
+$radius-none: 0;
+$radius-sm: 0.25rem;    // 4px
+$radius-md: 0.5rem;     // 8px
+$radius-lg: 0.75rem;    // 12px - 主推
+$radius-xl: 1rem;       // 16px - 主推
+$radius-2xl: 1.5rem;    // 24px
+$radius-3xl: 2rem;      // 32px
+$radius-full: 9999px;
+
+// 兼容旧变量名
+$border-radius-base: $radius-md;
+$border-radius-medium: $radius-lg;
+$border-radius-large: $radius-xl;
+$border-radius-round: $radius-full;
 $border-radius-circle: 50%;
 
-// 阴影
-$box-shadow-base: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
-$box-shadow-dark: 0 2px 12px 0 rgba(0, 0, 0, 0.2);
-$box-shadow-light: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
+// ----------------------------------------
+// 阴影系统 (Shadows - 四级系统)
+// ----------------------------------------
+// 基础阴影
+$shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+$shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+$shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+$shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+$shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+$shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
 
-// 响应式断点
+// 内阴影
+$shadow-inner: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05);
+$shadow-inner-lg: inset 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+
+// 发光阴影 (品牌色)
+$shadow-glow: 0 0 20px rgba(15, 118, 110, 0.3);
+$shadow-glow-lg: 0 0 30px rgba(15, 118, 110, 0.4);
+$shadow-glow-success: 0 0 20px rgba(16, 185, 129, 0.3);
+$shadow-glow-warning: 0 0 20px rgba(245, 158, 11, 0.3);
+$shadow-glow-danger: 0 0 20px rgba(239, 68, 68, 0.3);
+
+// 兼容旧变量名
+$box-shadow-base: $shadow-md;
+$box-shadow-dark: $shadow-lg;
+$box-shadow-light: $shadow-sm;
+
+// ----------------------------------------
+// 渐变预设 (Gradients)
+// ----------------------------------------
+// 品牌渐变
+$gradient-primary: linear-gradient(135deg, $primary-color 0%, $primary-dark 100%);
+$gradient-primary-light: linear-gradient(135deg, $primary-light 0%, $primary-color 100%);
+$gradient-secondary: linear-gradient(135deg, $secondary-color 0%, $secondary-light 100%);
+
+// 按钮渐变
+$gradient-btn-primary: linear-gradient(135deg, $primary-color 0%, $primary-dark 100%);
+$gradient-btn-primary-hover: linear-gradient(135deg, $primary-dark 0%, $primary-darker 100%);
+$gradient-btn-success: linear-gradient(135deg, $success-color 0%, $success-dark 100%);
+$gradient-btn-warning: linear-gradient(135deg, $warning-color 0%, $warning-dark 100%);
+$gradient-btn-danger: linear-gradient(135deg, $danger-color 0%, $danger-dark 100%);
+
+// 卡片渐变
+$gradient-card: linear-gradient(180deg, $white 0%, $gray-50 100%);
+$gradient-card-hover: linear-gradient(180deg, $white 0%, $primary-lighter 100%);
+
+// 背景渐变
+$gradient-bg-hero: linear-gradient(135deg, $bg-primary 0%, $white 50%, $gray-50 100%);
+$gradient-bg-section: linear-gradient(180deg, $white 0%, $bg-primary 100%);
+$gradient-bg-overlay: linear-gradient(180deg, rgba(15, 118, 110, 0.05) 0%, rgba(15, 118, 110, 0.1) 100%);
+
+// 装饰渐变
+$gradient-rainbow: linear-gradient(90deg, $primary-color, $secondary-color, $success-color, $warning-color);
+$gradient-mesh: radial-gradient(at 40% 20%, rgba(15, 118, 110, 0.1) 0px, transparent 50%),
+                radial-gradient(at 80% 0%, rgba(3, 105, 161, 0.1) 0px, transparent 50%),
+                radial-gradient(at 0% 50%, rgba(16, 185, 129, 0.1) 0px, transparent 50%);
+
+// ----------------------------------------
+// 过渡动画 (Transitions)
+// ----------------------------------------
+$transition-fast: 150ms ease;
+$transition-normal: 200ms ease;
+$transition-slow: 300ms ease;
+$transition-slower: 500ms ease;
+
+// 缓动函数
+$ease-in: cubic-bezier(0.4, 0, 1, 1);
+$ease-out: cubic-bezier(0, 0, 0.2, 1);
+$ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+$ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+// 兼容旧变量名
+$transition-base: all 300ms ease-in-out;
+
+// ----------------------------------------
+// 响应式断点 (Breakpoints)
+// ----------------------------------------
 $breakpoint-xs: 375px;
 $breakpoint-sm: 768px;
 $breakpoint-md: 992px;
 $breakpoint-lg: 1200px;
 $breakpoint-xl: 1920px;
 
-// 过渡
-$transition-base: all 0.3s ease-in-out;
-$transition-fast: all 0.2s ease;
-$transition-slow: all 0.5s ease;
+// ----------------------------------------
+// Z-Index 层级 (Z-Index Scale)
+// ----------------------------------------
+$z-dropdown: 1000;
+$z-sticky: 1020;
+$z-fixed: 1030;
+$z-modal-backdrop: 1040;
+$z-modal: 1050;
+$z-popover: 1060;
+$z-tooltip: 1070;
+
+// ----------------------------------------
+// 布局尺寸 (Layout)
+// ----------------------------------------
+$sidebar-width: 260px;
+$sidebar-collapsed-width: 64px;
+$header-height: 64px;
+$footer-height: 48px;
+$content-max-width: 1400px;

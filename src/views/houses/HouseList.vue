@@ -17,6 +17,8 @@
             placeholder="房源标题/地址"
             clearable
             style="width: 200px"
+            @input="debouncedSearch"
+            @clear="handleSearch"
           />
         </el-form-item>
         <el-form-item label="城市">
@@ -25,6 +27,8 @@
             placeholder="请输入城市"
             clearable
             style="width: 150px"
+            @input="debouncedSearch"
+            @clear="handleSearch"
           />
         </el-form-item>
         <el-form-item label="区域">
@@ -33,6 +37,8 @@
             placeholder="请输入区域"
             clearable
             style="width: 150px"
+            @input="debouncedSearch"
+            @clear="handleSearch"
           />
         </el-form-item>
         <el-form-item label="房源类型">
@@ -132,7 +138,20 @@
               <span>{{ house.room_count }}室{{ house.hall_count }}厅{{ house.bathroom_count }}卫</span>
               <span>{{ getFloorText(house) }}</span>
             </div>
-            <div class="house-price">
+            <!-- 出租进度 -->
+            <div class="rental-progress" v-if="house.rental_type === 'shared'">
+              <span class="progress-label">出租进度</span>
+              <div class="progress-info">
+                <span class="progress-text">{{ house.rented_rooms || 0 }}/{{ house.total_rooms || house.room_count }}间已租</span>
+                <el-progress 
+                  :percentage="((house.rented_rooms || 0) / (house.total_rooms || house.room_count) * 100).toFixed(0)" 
+                  :stroke-width="6" 
+                  :show-text="false"
+                  class="progress-bar"
+                />
+              </div>
+            </div>
+            <div class="house-price" v-if="house.rental_type !== 'shared'">
               <span class="price-label">租金</span>
               <span class="price-value">¥{{ house.rent_price }}</span>
               <span class="price-unit">/月</span>
@@ -206,11 +225,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, Refresh, Location, Picture, Edit, Delete } from '@element-plus/icons-vue'
-import { getHouseList as getHouseListApi, deleteHouse } from '@/api/house'
+import { debounce } from 'lodash-es'
+import { getHouseList as getHouseListApi, deleteHouse, getHouseDetail as getHouseDetailApi } from '@/api/house'
 import { useHouseStore } from '@/store/house'
 import { useUserStore } from '@/store/user'
 import HouseForm from '@/components/house/HouseForm.vue'
@@ -310,6 +330,11 @@ const loadHouseList = async () => {
   }
 }
 
+// 创建防抖搜索函数(延迟 500ms)
+const debouncedSearch = debounce(() => {
+  loadHouseList()
+}, 500)
+
 // 搜索
 const handleSearch = () => {
   pagination.page = 1
@@ -344,11 +369,20 @@ const handleAdd = () => {
 }
 
 // 编辑房源
-const handleEdit = (house) => {
-  dialogTitle.value = '编辑房源'
-  isEdit.value = true
-  currentHouseData.value = { ...house }
-  dialogVisible.value = true
+const handleEdit = async (house) => {
+  try {
+    // 先获取完整的房源详情（包含 rooms 字段）
+    const res = await getHouseDetailApi(house.id)
+    const houseDetail = res.data
+    
+    dialogTitle.value = '编辑房源'
+    isEdit.value = true
+    currentHouseData.value = houseDetail
+    dialogVisible.value = true
+  } catch (error) {
+    console.error('获取房源详情失败:', error)
+    ElMessage.error('获取房源详情失败，无法编辑')
+  }
 }
 
 // 删除房源
@@ -422,6 +456,11 @@ const handlePageChange = () => {
 
 onMounted(() => {
   loadHouseList()
+})
+
+onBeforeUnmount(() => {
+  // 取消防抖函数,防止内存泄漏
+  debouncedSearch.cancel()
 })
 </script>
 
@@ -555,6 +594,43 @@ onMounted(() => {
           margin-bottom: 8px;
           font-size: 13px;
           color: #606266;
+        }
+
+        .rental-progress {
+          margin: 8px 0;
+
+          .progress-label {
+            font-size: 13px;
+            color: #909399;
+            display: block;
+            margin-bottom: 4px;
+          }
+
+          .progress-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+
+            .progress-text {
+              font-size: 12px;
+              color: #606266;
+            }
+
+            .progress-bar {
+              width: 100%;
+              height: 6px;
+
+              .el-progress-bar__outer {
+                background-color: #f0f2f5;
+                border-radius: 3px;
+              }
+
+              .el-progress-bar__inner {
+                background-color: #409eff;
+                border-radius: 3px;
+              }
+            }
+          }
         }
 
         .house-price {

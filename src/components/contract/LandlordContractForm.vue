@@ -519,8 +519,6 @@ const handleSubmit = async () => {
       remark: formData.remark || undefined
     }
     
-    console.log('提交数据:', submitData)
-    
     // 触发提交事件
     emit('submit', submitData)
     return true

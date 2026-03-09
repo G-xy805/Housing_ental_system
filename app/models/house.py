@@ -33,11 +33,13 @@ class House(BaseModel):
     bathroom_count = db.Column(db.Integer, comment='卫生间数')
     floor = db.Column(db.String(20), comment='楼层')
     total_floors = db.Column(db.Integer, comment='总楼层')
+    orientation = db.Column(db.String(20), comment='朝向')
+    decoration = db.Column(db.String(20), comment='装修情况')
     
-    # 租金信息
-    rent_price = db.Column(db.Float, nullable=False, comment='租金（元/月）')
-    deposit = db.Column(db.Float, comment='押金（元）')
-    payment_method = db.Column(db.String(50), default='押一付三', comment='付款方式')
+    # 租金信息（合租模式下可以为 NULL，因为房间级别会设置）
+    rent_price = db.Column(db.Numeric(10, 2), nullable=True, comment='租金（元/月）')
+    deposit = db.Column(db.Numeric(10, 2), nullable=True, comment='押金（元）')
+    payment_method = db.Column(db.String(50), nullable=True, comment='付款方式')
     
     # 房源状态：available-空闲，rented-已租，maintenance-维护中
     # 对于合租房源，状态根据房间状态自动计算
@@ -167,13 +169,82 @@ class House(BaseModel):
         
         # 简化处理，避免在列表查询时加载过多关联数据
         try:
+            from .room import Room
             data['room_count_actual'] = self.rooms.count()
             data['available_rooms'] = []
+            
+            # 合租房源添加出租统计
+            if self.rental_type == 'shared':
+                data['total_rooms'] = data['room_count_actual']
+                data['rented_rooms'] = self.rooms.filter(Room.status == 'rented').count()
         except:
             data['room_count_actual'] = 0
             data['available_rooms'] = []
+            if self.rental_type == 'shared':
+                data['total_rooms'] = 0
+                data['rented_rooms'] = 0
         
         return data
+    
+    def get_cascade_relations(self):
+        """
+        获取需要级联处理的关系定义
+        
+        房源删除规则：
+        - 如果有活跃合同（active/draft），不允许删除
+        - 房间可以级联软删除
+        - 合同可以级联软删除（仅非活跃状态）
+        - 媒体文件可以级联软删除
+        """
+        from .room import Room
+        from .contract import Contract
+        from .media import Media
+        
+        return {
+            'contracts': {
+                'model': Contract,
+                'cascade_delete': True,
+                'validate_not_empty': False,  # 不阻止删除，但会级联删除
+                'error_message': '关联的合同'
+            },
+            'rooms': {
+                'model': Room,
+                'cascade_delete': True,
+                'validate_not_empty': False,
+                'error_message': '关联的房间'
+            },
+            'media': {
+                'model': Media,
+                'cascade_delete': True,
+                'validate_not_empty': False,
+                'error_message': '关联的媒体文件'
+            }
+        }
+    
+    def validate_delete(self):
+        """
+        验证是否可以删除房源
+        
+        特殊规则：
+        - 如果有活跃合同（active/draft），不允许删除
+        
+        Returns:
+            Tuple[bool, List[str]]: (是否可以删除, 错误消息列表)
+        """
+        # 先调用父类的基础验证
+        can_delete, errors = super().validate_delete()
+        
+        # 检查是否有活跃合同
+        from .contract import Contract
+        active_contracts = self.contracts.filter(
+            Contract.status.in_(['active', 'draft'])
+        ).count()
+        
+        if active_contracts > 0:
+            errors.append(f'存在 {active_contracts} 个活跃合同，无法删除')
+            can_delete = False
+        
+        return can_delete, errors
     
     def __repr__(self):
         return f'<House {self.title}>'

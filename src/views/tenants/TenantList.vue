@@ -3,10 +3,16 @@
     <el-card class="page-header">
       <div class="header-content">
         <h2>租客管理</h2>
-        <el-button type="primary" @click="handleAdd">
-          <el-icon><Plus /></el-icon>
-          新增租客
-        </el-button>
+        <div class="header-buttons">
+          <el-button type="primary" @click="handleAdd">
+            <el-icon><Plus /></el-icon>
+            新增租客
+          </el-button>
+          <el-button type="primary" @click="handleBatchNotify" :disabled="selectedTenants.length === 0">
+            <el-icon><Bell /></el-icon>
+            批量发送通知
+          </el-button>
+        </div>
       </div>
     </el-card>
 
@@ -118,7 +124,9 @@
         :data="tenantList"
         stripe
         style="width: 100%"
+        @selection-change="handleSelectionChange"
       >
+        <el-table-column type="selection" width="55" />
         <el-table-column prop="id" label="ID" min-width="60" />
         <el-table-column prop="name" label="姓名" min-width="80" />
         <el-table-column prop="phone" label="手机号" min-width="120" />
@@ -127,6 +135,19 @@
             <el-tag :type="getStatusType(row.status)" size="small">
               {{ getStatusText(row.status) }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="credit_score" label="信用分" min-width="100">
+          <template #default="{ row }">
+            <div v-if="row.credit_score !== undefined && row.credit_score !== null" class="credit-score-cell">
+              <span class="score-value" :style="{ color: getCreditColor(row.credit_score) }">
+                {{ row.credit_score }}
+              </span>
+              <el-tag :type="getCreditTagType(row.credit_score)" size="small" style="margin-left: 8px;">
+                {{ getCreditLevel(row.credit_score) }}
+              </el-tag>
+            </div>
+            <span v-else class="no-score">-</span>
           </template>
         </el-table-column>
         <el-table-column prop="occupation" label="职业" min-width="80" />
@@ -317,6 +338,17 @@
             {{ getStatusText(currentTenant.status) }}
           </el-tag>
         </div>
+        <div class="tenant-credit" v-if="currentTenant.credit_score !== undefined && currentTenant.credit_score !== null">
+          <div class="credit-score-display">
+            <div class="credit-label">信用分</div>
+            <div class="credit-value" :style="{ color: getCreditColor(currentTenant.credit_score) }">
+              {{ currentTenant.credit_score }}
+            </div>
+            <el-tag :type="getCreditTagType(currentTenant.credit_score)" size="small">
+              {{ getCreditLevel(currentTenant.credit_score) }}
+            </el-tag>
+          </div>
+        </div>
       </div>
       
       <el-descriptions :column="2" border>
@@ -362,6 +394,29 @@
           {{ currentTenant.remark || '-' }}
         </el-descriptions-item>
       </el-descriptions>
+
+      <div v-if="creditRecords.length > 0" class="credit-records-section">
+        <el-divider content-position="left">信用记录</el-divider>
+        <el-timeline>
+          <el-timeline-item
+            v-for="record in creditRecords"
+            :key="record.id"
+            :timestamp="formatDate(record.created_at)"
+            placement="top"
+            :type="record.score_change > 0 ? 'success' : 'danger'"
+          >
+            <el-card class="credit-record-card">
+              <div class="record-header">
+                <span class="record-type">{{ getCreditEventType(record.event_type) }}</span>
+                <span class="score-change" :style="{ color: record.score_change > 0 ? '#67C23A' : '#F56C6C' }">
+                  {{ record.score_change > 0 ? '+' : '' }}{{ record.score_change }}分
+                </span>
+              </div>
+              <div class="record-description">{{ record.description || '-' }}</div>
+            </el-card>
+          </el-timeline-item>
+        </el-timeline>
+      </div>
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 12px;">
           <el-button @click="detailVisible = false">关闭</el-button>
@@ -395,19 +450,85 @@
         </el-table-column>
       </el-table>
     </el-dialog>
+
+    <el-dialog
+      v-model="notifyDialogVisible"
+      title="批量发送通知"
+      width="600px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-alert
+        title="通知信息"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 20px"
+      >
+        将向选中的 {{ selectedTenants.length }} 位租客发送通知
+      </el-alert>
+      
+      <el-form
+        ref="notifyFormRef"
+        :model="notifyForm"
+        :rules="notifyFormRules"
+        label-width="100px"
+        label-position="right"
+      >
+        <el-form-item label="通知标题" prop="title">
+          <el-input
+            v-model="notifyForm.title"
+            placeholder="请输入通知标题"
+            maxlength="100"
+            show-word-limit
+          />
+        </el-form-item>
+        
+        <el-form-item label="通知类型" prop="type">
+          <el-select v-model="notifyForm.type" placeholder="请选择通知类型" style="width: 100%">
+            <el-option label="系统通知" value="system" />
+            <el-option label="缴费提醒" value="payment" />
+            <el-option label="合同提醒" value="contract" />
+            <el-option label="其他" value="other" />
+          </el-select>
+        </el-form-item>
+        
+        <el-form-item label="通知内容" prop="content">
+          <el-input
+            v-model="notifyForm.content"
+            type="textarea"
+            :rows="5"
+            placeholder="请输入通知内容"
+            maxlength="500"
+            show-word-limit
+          />
+        </el-form-item>
+      </el-form>
+      
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="notifyDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleNotifySubmit" :loading="notifySubmitLoading">
+            发送通知
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, Refresh, User, CircleCheck, CircleClose, Warning, ArrowDown, Clock } from '@element-plus/icons-vue'
+import { Plus, Search, Refresh, User, CircleCheck, CircleClose, Warning, ArrowDown, Clock, Bell } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { getTenantList, getTenantDetail, createTenant, updateTenant, deleteTenant, getTenantStats, getTenantContracts } from '@/api/tenant'
+import { batchSend } from '@/api/notification'
 import { uploadImage } from '@/api/upload'
 
 const loading = ref(false)
 const tenantList = ref([])
+const selectedTenants = ref([])
 const dialogVisible = ref(false)
 const dialogTitle = ref('新增租客')
 const detailVisible = ref(false)
@@ -417,6 +538,10 @@ const currentTenant = ref({})
 const contractsVisible = ref(false)
 const contractsLoading = ref(false)
 const tenantContracts = ref([])
+const notifyDialogVisible = ref(false)
+const notifySubmitLoading = ref(false)
+const notifyFormRef = ref(null)
+const creditRecords = ref([])
 
 const statistics = reactive({
   total: 0,
@@ -451,6 +576,12 @@ const tenantForm = reactive({
   photo: ''
 })
 
+const notifyForm = reactive({
+  title: '',
+  type: 'system',
+  content: ''
+})
+
 const formRules = {
   name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   id_card: [
@@ -468,6 +599,12 @@ const formRules = {
     { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }
   ],
   emergency_relation: []
+}
+
+const notifyFormRules = {
+  title: [{ required: true, message: '请输入通知标题', trigger: 'blur' }],
+  type: [{ required: true, message: '请选择通知类型', trigger: 'change' }],
+  content: [{ required: true, message: '请输入通知内容', trigger: 'blur' }]
 }
 
 const getStatusType = (status) => {
@@ -508,9 +645,51 @@ const getContractStatusText = (status) => {
   return texts[status] || status
 }
 
+const getCreditLevel = (score) => {
+  if (score >= 90) return '优秀'
+  if (score >= 80) return '良好'
+  if (score >= 60) return '中等'
+  if (score >= 40) return '一般'
+  return '较差'
+}
+
+const getCreditColor = (score) => {
+  if (score >= 90) return '#67C23A'
+  if (score >= 80) return '#409EFF'
+  if (score >= 60) return '#E6A23C'
+  if (score >= 40) return '#F56C6C'
+  return '#F56C6C'
+}
+
+const getCreditTagType = (score) => {
+  if (score >= 90) return 'success'
+  if (score >= 80) return ''
+  if (score >= 60) return 'warning'
+  return 'danger'
+}
+
 const maskIdCard = (idCard) => {
   if (!idCard) return '-'
-  return idCard.replace(/^(.{6}).*(.{4})$/, '$1********$2')
+  
+  // 转换为字符串并去除空格
+  const idCardStr = String(idCard).trim()
+  
+  // 验证身份证号长度(15位或18位)
+  if (idCardStr.length !== 15 && idCardStr.length !== 18) {
+    return idCardStr // 长度不符合要求,返回原值
+  }
+  
+  // 验证是否只包含数字和X(最后一位可以是X)
+  const validPattern = idCardStr.length === 15 
+    ? /^\d{15}$/ 
+    : /^\d{17}[\dXx]$/
+  
+  if (!validPattern.test(idCardStr)) {
+    return idCardStr // 格式不符合要求,返回原值
+  }
+  
+  // 脱敏处理:保留前6位和后4位,中间用*代替
+  return idCardStr.replace(/^(.{6}).*(.{4})$/, '$1********$2')
 }
 
 const formatDate = (date) => {
@@ -598,10 +777,35 @@ const handleView = async (row) => {
     const res = await getTenantDetail(row.id)
     currentTenant.value = res.data || row
     detailVisible.value = true
+    loadCreditRecords(row.id)
   } catch (error) {
     currentTenant.value = { ...row }
     detailVisible.value = true
   }
+}
+
+const loadCreditRecords = async (tenantId) => {
+  try {
+    const res = await getTenantCreditRecords(tenantId, { limit: 10 })
+    creditRecords.value = res.data?.items || []
+  } catch (error) {
+    console.error('获取信用记录失败', error)
+    creditRecords.value = []
+  }
+}
+
+const getCreditEventType = (eventType) => {
+  const types = {
+    payment_on_time: '按时付款',
+    payment_late: '逾期付款',
+    contract_complete: '合同完成',
+    contract_terminated: '合同终止',
+    damage_property: '损坏财产',
+    good_behavior: '良好行为',
+    bad_behavior: '不良行为',
+    manual_adjust: '人工调整'
+  }
+  return types[eventType] || eventType
 }
 
 const handleEdit = (row) => {
@@ -751,6 +955,56 @@ const handlePhotoDelete = () => {
   ElMessage.success('照片已删除')
 }
 
+// 选择变化处理
+const handleSelectionChange = (selection) => {
+  selectedTenants.value = selection
+}
+
+// 批量发送通知
+const handleBatchNotify = () => {
+  if (selectedTenants.value.length === 0) {
+    ElMessage.warning('请先选择要发送通知的租客')
+    return
+  }
+  
+  notifyForm.title = ''
+  notifyForm.type = 'system'
+  notifyForm.content = ''
+  notifyDialogVisible.value = true
+}
+
+// 提交批量通知
+const handleNotifySubmit = async () => {
+  if (!notifyFormRef.value) return
+  
+  try {
+    await notifyFormRef.value.validate()
+  } catch (error) {
+    return
+  }
+  
+  notifySubmitLoading.value = true
+  try {
+    const tenantIds = selectedTenants.value.map(item => item.id)
+    const data = {
+      tenant_ids: tenantIds,
+      title: notifyForm.title,
+      type: notifyForm.type,
+      content: notifyForm.content
+    }
+    
+    await batchSend(data)
+    ElMessage.success(`成功向 ${tenantIds.length} 位租客发送通知`)
+    notifyDialogVisible.value = false
+    selectedTenants.value = []
+  } catch (error) {
+    console.error('发送通知失败:', error)
+    ElMessage.error('发送通知失败：' + (error.message || '请稍后重试'))
+  } finally {
+    notifySubmitLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadTenantList()
   fetchStatistics()
@@ -771,6 +1025,11 @@ onMounted(() => {
         margin: 0;
         font-size: 20px;
         font-weight: 600;
+      }
+      
+      .header-buttons {
+        display: flex;
+        gap: 10px;
       }
     }
   }
@@ -794,11 +1053,35 @@ onMounted(() => {
     }
     
     .tenant-basic {
+      flex: 1;
+      
       .tenant-name {
         margin: 0;
         font-size: 24px;
         font-weight: bold;
         color: #fff;
+      }
+    }
+
+    .tenant-credit {
+      .credit-score-display {
+        background: rgba(255, 255, 255, 0.2);
+        padding: 16px 24px;
+        border-radius: 8px;
+        text-align: center;
+        
+        .credit-label {
+          font-size: 14px;
+          color: rgba(255, 255, 255, 0.9);
+          margin-bottom: 8px;
+        }
+        
+        .credit-value {
+          font-size: 36px;
+          font-weight: bold;
+          color: #fff;
+          margin-bottom: 8px;
+        }
       }
     }
   }
@@ -909,6 +1192,44 @@ onMounted(() => {
       align-items: center;
       justify-content: center;
       background-color: #f5f7fa;
+    }
+  }
+
+  .credit-score-cell {
+    display: flex;
+    align-items: center;
+    
+    .score-value {
+      font-size: 16px;
+      font-weight: 600;
+    }
+  }
+
+  .credit-records-section {
+    margin-top: 20px;
+    
+    .credit-record-card {
+      .record-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+        
+        .record-type {
+          font-weight: 600;
+          color: #303133;
+        }
+        
+        .score-change {
+          font-size: 16px;
+          font-weight: 600;
+        }
+      }
+      
+      .record-description {
+        color: #606266;
+        font-size: 14px;
+      }
     }
   }
 }

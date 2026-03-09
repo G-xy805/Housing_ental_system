@@ -21,6 +21,9 @@
   - [4.13 公开房源模块 (Public Houses)](#413-公开房源模块-public-houses)
   - [4.14 审计日志模块 (Audit)](#414-审计日志模块-audit)
   - [4.15 系统监控模块 (Monitoring)](#415-系统监控模块-monitoring)
+  - [4.16 启动任务模块 (Startup Tasks)](#416-启动任务模块-startup-tasks)
+  - [4.17 押金退款模块 (Deposit Refunds)](#417-押金退款模块-deposit-refunds)
+  - [4.18 通知管理模块 (Notifications)](#418-通知管理模块-notifications)
 - [5. 数据模型参考](#5-数据模型参考)
 - [6. 错误码说明](#6-错误码说明)
 
@@ -1162,6 +1165,9 @@ Authorization: Bearer <token>
       "payment_type": "季付",
       "payment_cycle": 3,
       "status": "active",
+      "deposit_status": "paid",
+      "deposit_status_name": "已支付",
+      "version": 1,
       "house_id": 1,
       "house_title": "精装修两居室",
       "room_id": null,
@@ -1169,8 +1175,12 @@ Authorization: Bearer <token>
       "tenant_id": 1,
       "tenant_name": "王小明",
       "is_expired": false,
+      "is_expiring_soon": false,
       "days_until_expiry": 300,
       "total_rent": 60000.0,
+      "is_renewal": false,
+      "original_contract_id": null,
+      "original_contract_no": null,
       "created_at": "2024-01-01T00:00:00Z"
     }
   ],
@@ -1180,6 +1190,16 @@ Authorization: Bearer <token>
   "pages": 3
 }
 ```
+
+**押金状态说明：**
+- `pending` - 待支付：合同创建后的初始状态
+- `paid` - 已支付：租客已支付押金
+- `transferred` - 已转移：续签时押金转移到新合同
+- `refunded` - 已退款：合同结束后押金已退还
+
+**乐观锁说明：**
+- `version` 字段用于并发控制，每次更新自动递增
+- 更新合同时需携带当前版本号，版本不匹配将返回错误
 
 #### 4.6.2 获取合同详情
 
@@ -1223,7 +1243,61 @@ PUT /api/contracts/<id>
 Authorization: Bearer <token>
 ```
 
-#### 4.6.5 删除合同（管理员）
+**请求体：**
+```json
+{
+  "title": "更新后的合同标题",
+  "rent_amount": 5500.0,
+  "version": 1
+}
+```
+
+> **乐观锁说明：**
+> - 更新合同时必须携带 `version` 字段
+> - 如果版本号不匹配，将返回 409 Conflict 错误
+> - 更新成功后版本号自动递增
+
+**错误响应（版本冲突）：**
+```json
+{
+  "success": false,
+  "error": "version_conflict",
+  "message": "合同已被其他用户修改，请刷新后重试"
+}
+```
+
+#### 4.6.5 更新押金状态
+
+```http
+POST /api/contracts/<id>/deposit-status
+Authorization: Bearer <token>
+```
+
+**权限要求：** edit 权限
+
+**请求体：**
+```json
+{
+  "deposit_status": "paid"
+}
+```
+
+**押金状态转换规则：**
+- `pending` → `paid`：确认收到押金
+- `pending` → `refunded`：押金为 0 时直接退款
+- `paid` → `transferred`：续签时转移押金到新合同
+- `paid` → `refunded`：合同结束后退还押金
+
+**错误响应：**
+```json
+{
+  "success": false,
+  "error": "invalid_transition",
+  "message": "押金状态不能从 '已退款' 转换为 '已支付'"
+}
+```
+
+#### 4.6.6 删除合同（管理员）
 
 ```http
 DELETE /api/contracts/<id>
@@ -2664,6 +2738,461 @@ Authorization: Bearer <token>
 
 ---
 
+### 4.16 启动任务模块 (Startup Tasks)
+
+**URL 前缀：** `/api/startup-tasks`
+
+**权限要求：** 需要登录
+
+#### 4.16.1 获取任务执行状态
+
+```http
+GET /api/startup-tasks/status
+Authorization: Bearer <token>
+```
+
+**查询参数：**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| task_name | string | 任务名称（可选） |
+| task_date | string | 任务日期（可选，格式：YYYY-MM-DD） |
+
+**响应：**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "task_name": "data_consistency_check",
+      "task_date": "2024-01-01",
+      "status": "completed",
+      "started_at": "2024-01-01T00:00:00Z",
+      "completed_at": "2024-01-01T00:01:00Z",
+      "total_records": 1000,
+      "processed_records": 1000,
+      "failed_records": 0,
+      "execution_time": 60.5
+    }
+  ]
+}
+```
+
+#### 4.16.2 获取任务执行日志
+
+```http
+GET /api/startup-tasks/logs
+Authorization: Bearer <token>
+```
+
+**查询参数：**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| task_name | string | 任务名称（可选） |
+| limit | int | 返回记录数量限制（默认 100，最大 1000） |
+
+**响应：**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "task_name": "contract_expiry_check",
+      "task_date": "2024-01-01",
+      "status": "completed",
+      "started_at": "2024-01-01T00:01:00Z",
+      "completed_at": "2024-01-01T00:02:00Z",
+      "total_records": 50,
+      "processed_records": 50,
+      "failed_records": 0,
+      "execution_time": 45.2
+    }
+  ]
+}
+```
+
+#### 4.16.3 获取任务配置信息（管理员）
+
+```http
+GET /api/startup-tasks/config
+Authorization: Bearer <token>
+```
+
+**响应：**
+```json
+{
+  "success": true,
+  "data": {
+    "enabled": true,
+    "batch_size": 100,
+    "timeout": 60,
+    "delay": 100,
+    "tasks": [
+      "data_consistency_check",
+      "contract_expiry_check",
+      "payment_overdue_process",
+      "contract_expiry_reminder"
+    ]
+  }
+}
+```
+
+#### 4.16.4 获取任务执行摘要
+
+```http
+GET /api/startup-tasks/summary
+Authorization: Bearer <token>
+```
+
+**响应：**
+```json
+{
+  "success": true,
+  "data": {
+    "date": "2024-01-01",
+    "total": 4,
+    "completed": 3,
+    "running": 1,
+    "failed": 0,
+    "pending": 0,
+    "tasks": [...]
+  }
+}
+```
+
+**任务类型说明：**
+- `data_consistency_check` - 数据一致性检查（优先级最高）
+- `contract_expiry_check` - 合同到期检查
+- `payment_overdue_process` - 支付逾期处理
+- `contract_expiry_reminder` - 合同到期提醒（优先级最低）
+
+**任务状态说明：**
+- `pending` - 待执行
+- `running` - 执行中
+- `completed` - 已完成
+- `failed` - 执行失败
+
+---
+
+### 4.17 押金退款模块 (Deposit Refunds)
+
+**URL 前缀：** `/api/deposit-refunds`
+
+**权限要求：** 需要登录
+
+#### 4.17.1 获取退款列表
+
+```http
+GET /api/deposit-refunds
+Authorization: Bearer <token>
+```
+
+**查询参数：**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| page | int | 页码，默认 1 |
+| per_page | int | 每页数量，默认 20，最大 100 |
+| status | string | 状态筛选 (pending/processed/completed/cancelled) |
+| contract_id | int | 合同 ID 筛选 |
+| tenant_id | int | 租客 ID 筛选 |
+| house_id | int | 房源 ID 筛选 |
+
+**响应：**
+```json
+{
+  "success": true,
+  "message": "获取退款列表成功",
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "contract_id": 1,
+        "contract_no": "HT2024010100001",
+        "contract_title": "租赁合同",
+        "tenant_id": 1,
+        "tenant_name": "王小明",
+        "tenant_phone": "13800138000",
+        "house_id": 1,
+        "house_title": "精装修两居室",
+        "house_address": "中关村大街1号",
+        "original_deposit": 5000.0,
+        "deductions": [
+          {
+            "type": "unpaid_rent",
+            "type_name": "未付租金",
+            "amount": 1000.0,
+            "description": "未付最后一个月租金"
+          }
+        ],
+        "total_deduction": 1000.0,
+        "refund_amount": 4000.0,
+        "status": "pending",
+        "status_name": "待处理",
+        "deposit_status": "paid",
+        "deposit_status_name": "已支付",
+        "processor_name": null,
+        "processed_at": null,
+        "completed_at": null,
+        "remark": "",
+        "created_at": "2024-01-01T00:00:00Z"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "per_page": 20,
+      "total": 10,
+      "pages": 1
+    }
+  }
+}
+```
+
+#### 4.17.2 获取退款详情
+
+```http
+GET /api/deposit-refunds/<refund_id>
+Authorization: Bearer <token>
+```
+
+**响应：**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "contract_id": 1,
+    "contract_no": "HT2024010100001",
+    "original_deposit": 5000.0,
+    "deductions": [...],
+    "total_deduction": 1000.0,
+    "refund_amount": 4000.0,
+    "status": "pending",
+    "status_name": "待处理",
+    "deduction_summary": [
+      {
+        "type": "unpaid_rent",
+        "type_name": "未付租金",
+        "total_amount": 1000.0,
+        "count": 1,
+        "items": [...]
+      }
+    ]
+  }
+}
+```
+
+#### 4.17.3 处理退款
+
+```http
+POST /api/deposit-refunds/<refund_id>/process
+Authorization: Bearer <token>
+```
+
+**权限要求：** edit 权限
+
+**请求体：**
+```json
+{
+  "deductions": [
+    {
+      "type": "unpaid_rent",
+      "amount": 1000,
+      "description": "未付最后一个月租金"
+    },
+    {
+      "type": "damage_compensation",
+      "amount": 500,
+      "description": "墙面损坏赔偿"
+    }
+  ],
+  "remark": "已确认扣款项"
+}
+```
+
+**扣款类型：**
+- `unpaid_rent` - 未付租金
+- `unpaid_utilities` - 未付水电费
+- `late_fees` - 滞纳金
+- `damage_compensation` - 损坏赔偿
+- `other` - 其他扣款
+
+**响应：**
+```json
+{
+  "success": true,
+  "message": "退款处理成功",
+  "data": {
+    "id": 1,
+    "status": "processed",
+    "status_name": "已处理",
+    "total_deduction": 1500.0,
+    "refund_amount": 3500.0,
+    "processed_at": "2024-01-01T12:00:00Z"
+  }
+}
+```
+
+#### 4.17.4 完成退款
+
+```http
+POST /api/deposit-refunds/<refund_id>/complete
+Authorization: Bearer <token>
+```
+
+**权限要求：** edit 权限
+
+**请求体：**
+```json
+{
+  "remark": "已通过银行转账退还"
+}
+```
+
+**响应：**
+```json
+{
+  "success": true,
+  "message": "退款完成",
+  "data": {
+    "id": 1,
+    "status": "completed",
+    "status_name": "已完成",
+    "completed_at": "2024-01-01T14:00:00Z"
+  }
+}
+```
+
+> **说明：** 完成退款时会自动更新合同押金状态为 `refunded`
+
+#### 4.17.5 取消退款
+
+```http
+POST /api/deposit-refunds/<refund_id>/cancel
+Authorization: Bearer <token>
+```
+
+**权限要求：** edit 权限
+
+**请求体：**
+```json
+{
+  "reason": "租客撤回退租申请"
+}
+```
+
+**响应：**
+```json
+{
+  "success": true,
+  "message": "退款已取消",
+  "data": {
+    "id": 1,
+    "status": "cancelled",
+    "status_name": "已取消"
+  }
+}
+```
+
+**退款状态说明：**
+- `pending` - 待处理：退款申请已创建，等待处理
+- `processed` - 已处理：已确认扣款项，等待打款
+- `completed` - 已完成：退款已打款完成
+- `cancelled` - 已取消：退款申请已取消
+
+---
+
+### 4.18 通知管理模块 (Notifications)
+
+**URL 前缀：** `/api/notifications`
+
+**权限要求：** 需要登录
+
+#### 4.18.1 批量发送通知
+
+```http
+POST /api/notifications/batch-send
+Authorization: Bearer <token>
+```
+
+**权限要求：** edit 权限
+
+**请求体：**
+```json
+{
+  "tenant_ids": [1, 2, 3],
+  "message": "您的租金即将到期，请及时缴纳。"
+}
+```
+
+**响应：**
+```json
+{
+  "success": true,
+  "message": "批量发送成功：3 条通知已发送",
+  "data": {
+    "sent_count": 3,
+    "failed_count": 0,
+    "details": [
+      {
+        "tenant_id": 1,
+        "success": true,
+        "tenant_name": "王小明",
+        "tenant_phone": "13800138000",
+        "message": "发送成功"
+      },
+      {
+        "tenant_id": 2,
+        "success": true,
+        "tenant_name": "李四",
+        "tenant_phone": "13900139000",
+        "message": "发送成功"
+      }
+    ]
+  }
+}
+```
+
+#### 4.18.2 发送单个通知
+
+```http
+POST /api/notifications/send
+Authorization: Bearer <token>
+```
+
+**权限要求：** edit 权限
+
+**请求体：**
+```json
+{
+  "tenant_id": 1,
+  "message": "您的合同将于 30 天后到期，如需续租请及时联系。"
+}
+```
+
+**响应：**
+```json
+{
+  "success": true,
+  "message": "通知发送成功",
+  "data": {
+    "tenant_id": 1,
+    "tenant_name": "王小明",
+    "tenant_phone": "13800138000",
+    "message": "您的合同将于 30 天后到期...",
+    "sent_at": "2024-01-01T12:00:00",
+    "active_contracts_count": 1
+  }
+}
+```
+
+> **注意：** 
+> - 通知内容不能超过 500 个字符
+> - 发送通知时会记录操作日志
+> - 当前为模拟发送，实际项目中可对接短信/邮件服务
+
+---
+
 ## 5. 数据模型参考
 
 详细的数据模型设计请参考 [DATABASE_MODELS.md](DATABASE_MODELS.md) 文件。
@@ -2726,6 +3255,12 @@ Authorization: Bearer <token>
 - `terminated` - 已终止
 - `renewed` - 已续签
 
+#### 押金状态 (Contract.deposit_status)
+- `pending` - 待支付
+- `paid` - 已支付
+- `transferred` - 已转移
+- `refunded` - 已退款
+
 #### 支付状态 (Payment.status)
 - `pending` - 待支付
 - `paid` - 已支付
@@ -2738,6 +3273,19 @@ Authorization: Bearer <token>
 - `deposit` - 押金
 - `utility` - 水电费
 - `other` - 其他
+
+#### 押金退款状态 (DepositRefund.status)
+- `pending` - 待处理
+- `processed` - 已处理
+- `completed` - 已完成
+- `cancelled` - 已取消
+
+#### 扣款类型 (DepositRefund.deduction_type)
+- `unpaid_rent` - 未付租金
+- `unpaid_utilities` - 未付水电费
+- `late_fees` - 滞纳金
+- `damage_compensation` - 损坏赔偿
+- `other` - 其他扣款
 
 #### 支付方式 (Payment.payment_method)
 - `cash` - 现金
@@ -2792,6 +3340,32 @@ Authorization: Bearer <token>
 }
 ```
 
+**乐观锁冲突：**
+```json
+{
+  "error": "version_conflict",
+  "message": "合同已被其他用户修改，请刷新后重试",
+  "current_version": 2,
+  "expected_version": 1
+}
+```
+
+**押金状态转换错误：**
+```json
+{
+  "error": "invalid_transition",
+  "message": "押金状态不能从 '已退款' 转换为 '已支付'"
+}
+```
+
+**退款完成条件不满足：**
+```json
+{
+  "error": "cannot_complete",
+  "message": "只有已处理状态的退款才能完成"
+}
+```
+
 **资源不存在：**
 ```json
 {
@@ -2806,6 +3380,7 @@ Authorization: Bearer <token>
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 1.2.0 | 2024-03-10 | 新增模块：押金退款模块（4.17）、通知管理模块（4.18）；新增功能：合同乐观锁机制、合同押金状态管理、押金状态转换接口；更新枚举值：押金状态、退款状态、扣款类型；新增错误码：乐观锁冲突、状态转换错误 |
 | 1.1.0 | 2024-03-05 | 新增接口：认证模块锁定/解锁用户账户、统计模块仪表盘/收入/入住率/即将到期合同、备份模块更新设置、审计模块开关状态；修正监控模块URL路径；补充租客pending状态和合同renewed状态 |
 | 1.0.0 | 2024-01-01 | 初始版本 |
 

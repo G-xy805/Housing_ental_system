@@ -24,9 +24,9 @@ class LandlordContractSchema(BaseSchema, TimestampMixin):
     end_date = fields.Date(required=True)
     
     # 金额信息
-    contract_amount = fields.Float(required=True)
-    service_fee_rate = fields.Float(required=True)
-    minimum_fee = fields.Float(allow_none=True)
+    contract_amount = fields.Decimal(required=True, places=2, as_string=False)
+    service_fee_rate = fields.Decimal(required=True, places=2, as_string=False)
+    minimum_fee = fields.Decimal(allow_none=True, places=2, as_string=False)
     payment_cycle = fields.Int(validate=lambda x: x > 0)
     
     # 状态
@@ -49,7 +49,7 @@ class LandlordContractSchema(BaseSchema, TimestampMixin):
     
     # 计算字段
     contract_term_months = fields.Float(dump_only=True)
-    service_fee = fields.Float(dump_only=True)
+    service_fee = fields.Decimal(dump_only=True, places=2, as_string=False)
     is_expired = fields.Bool(dump_only=True)
     days_until_expiry = fields.Int(dump_only=True)
     houses = fields.List(fields.Dict(), dump_only=True)
@@ -91,9 +91,9 @@ class LandlordContractCreateSchema(BaseSchema):
     start_date = fields.Date(required=True)
     end_date = fields.Date(required=True)
     
-    contract_amount = fields.Float(required=True, validate=lambda x: x > 0)
-    service_fee_rate = fields.Float(required=True, validate=lambda x: 0 <= x <= 100)
-    minimum_fee = fields.Float(allow_none=True, validate=lambda x: x >= 0 if x else True)
+    contract_amount = fields.Decimal(required=True, places=2, as_string=False, validate=lambda x: x > 0)
+    service_fee_rate = fields.Decimal(required=True, places=2, as_string=False, validate=lambda x: 0 <= x <= 100)
+    minimum_fee = fields.Decimal(allow_none=True, places=2, as_string=False, validate=lambda x: x >= 0 if x else True)
     payment_cycle = fields.Int(validate=lambda x: x > 0)
     
     status = fields.Str(validate=lambda x: x in ['draft', 'active', 'expired', 'terminated'])
@@ -122,9 +122,9 @@ class LandlordContractUpdateSchema(BaseSchema):
     start_date = fields.Date(allow_none=True)
     end_date = fields.Date(allow_none=True)
     
-    contract_amount = fields.Float(allow_none=True, validate=lambda x: x > 0 if x else True)
-    service_fee_rate = fields.Float(allow_none=True, validate=lambda x: 0 <= x <= 100 if x else True)
-    minimum_fee = fields.Float(allow_none=True, validate=lambda x: x >= 0 if x else True)
+    contract_amount = fields.Decimal(allow_none=True, places=2, as_string=False, validate=lambda x: x > 0 if x else True)
+    service_fee_rate = fields.Decimal(allow_none=True, places=2, as_string=False, validate=lambda x: 0 <= x <= 100 if x else True)
+    minimum_fee = fields.Decimal(allow_none=True, places=2, as_string=False, validate=lambda x: x >= 0 if x else True)
     payment_cycle = fields.Int(validate=lambda x: x > 0)
     
     status = fields.Str(validate=lambda x: x in ['draft', 'active', 'expired', 'terminated'])

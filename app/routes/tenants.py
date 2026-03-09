@@ -146,7 +146,9 @@ def format_tenant_response(tenant: Tenant, include_contracts: bool = False) -> D
 
 def check_id_card_duplicate(id_card: str, exclude_id: int = None) -> Optional[Tenant]:
     """
-    检查身份证号是否已存在
+    检查身份证号是否已存在（使用哈希值快速查询）
+    
+    性能优化：使用 SHA-256 哈希值进行快速查重，无需遍历解密所有记录
     
     Args:
         id_card: 身份证号
@@ -155,15 +157,19 @@ def check_id_card_duplicate(id_card: str, exclude_id: int = None) -> Optional[Te
     Returns:
         Tenant or None: 如果存在则返回租客对象
     """
-    # 由于身份证号是加密存储的，我们需要检查所有租客的身份证号
-    # 注意：这种方法在租客数量较多时可能会影响性能
-    tenants = Tenant.query.all()
-    for tenant in tenants:
-        if tenant.get_id_card() == id_card:
-            if exclude_id and tenant.id == exclude_id:
-                continue
-            return tenant
-    return None
+    from app.models.tenant import calculate_id_card_hash
+    
+    # 计算身份证号的哈希值
+    id_card_hash = calculate_id_card_hash(id_card)
+    if not id_card_hash:
+        return None
+    
+    # 使用哈希值进行快速查询
+    query = Tenant.query.filter(Tenant.id_card_hash == id_card_hash)
+    if exclude_id:
+        query = query.filter(Tenant.id != exclude_id)
+    
+    return query.first()
 
 
 # ============================================================================
@@ -205,13 +211,27 @@ def get_tenants():
         }
     """
     try:
-        # 获取查询参数
+        today = datetime.now().date()
+        expired_contracts = Contract.query.filter(
+            Contract.status == 'active',
+            Contract.end_date < today
+        ).all()
+        
+        for contract in expired_contracts:
+            contract.status = 'expired'
+            if contract.house:
+                contract.house.update_status()
+            if contract.tenant_rel:
+                contract.tenant_rel.update_status()
+        
+        if expired_contracts:
+            db.session.commit()
+        
         page = request.args.get('page', 1, type=int)
         page_size = request.args.get('page_size', type=int)
         per_page_arg = request.args.get('per_page', type=int)
         per_page = min(page_size or per_page_arg or 20, 100)
         
-        # 构建查询（使用 db.session.query 避免 SoftDeleteQuery 的 paginate 问题）
         query = db.session.query(Tenant).filter(Tenant.deleted_at.is_(None))
         
         # 关键词搜索（姓名、手机号）
@@ -591,6 +611,57 @@ def get_tenant_contracts(tenant_id: int):
     except Exception as e:
         current_app.logger.error(f"获取租客合同列表失败：{str(e)}")
         return APIResponse.server_error("获取租客合同列表失败")
+
+
+@tenants_bp.route('/<int:tenant_id>/auto-status', methods=['POST'])
+@login_required
+def recalculate_tenant_status(tenant_id: int):
+    """
+    重新计算租客状态（基于合同状态）
+    
+    Path Parameters:
+        tenant_id: 租客 ID
+        
+    Response:
+        {
+            "success": true,
+            "data": {
+                "id": 1,
+                "old_status": "active",
+                "new_status": "expired",
+                "active_contracts_count": 0
+            }
+        }
+    """
+    try:
+        tenant = Tenant.query.get(tenant_id)
+        
+        if not tenant:
+            return APIResponse.not_found("租客不存在")
+        
+        old_status = tenant.status
+        new_status = tenant.update_status()
+        
+        if old_status != new_status:
+            db.session.commit()
+            current_app.logger.info(
+                f"租客 {tenant_id} 状态从 {old_status} 变更为 {new_status}"
+            )
+        
+        active_contracts = tenant.get_active_contracts()
+        
+        return APIResponse.success({
+            'id': tenant.id,
+            'old_status': old_status,
+            'new_status': new_status,
+            'active_contracts_count': len(active_contracts),
+            'changed': old_status != new_status
+        }, "租客状态重新计算成功")
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"重新计算租客状态失败：{str(e)}")
+        return APIResponse.server_error("重新计算租客状态失败")
 
 
 # ============================================================================

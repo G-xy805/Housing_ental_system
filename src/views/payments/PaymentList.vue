@@ -577,6 +577,11 @@
             {{ getStatusText(currentPayment.status) }}
           </el-tag>
         </el-descriptions-item>
+        <el-descriptions-item label="支付类型">
+          <el-tag :type="getPaymentTypeTag(currentPayment.payment_type)" size="small">
+            {{ getPaymentTypeText(currentPayment.payment_type) }}
+          </el-tag>
+        </el-descriptions-item>
         <el-descriptions-item label="租客姓名">
           {{ currentPayment.tenant_name || '-' }}
         </el-descriptions-item>
@@ -937,6 +942,28 @@ const getPaymentMethodText = (method) => {
   return texts[method] || method
 }
 
+// 支付类型文本
+const getPaymentTypeText = (type) => {
+  const texts = {
+    rent: '租金',
+    deposit: '押金',
+    utility: '水电费',
+    other: '其他'
+  }
+  return texts[type] || type || '-'
+}
+
+// 支付类型标签颜色
+const getPaymentTypeTag = (type) => {
+  const tags = {
+    rent: 'primary',
+    deposit: 'warning',
+    utility: 'success',
+    other: 'info'
+  }
+  return tags[type] || 'info'
+}
+
 // 获取行类名（用于高亮逾期记录）
 const getRowClassName = ({ row }) => {
   if (row.status === 'overdue') {
@@ -964,11 +991,6 @@ const loadPaymentList = async () => {
     const res = await getPaymentList(params)
     paymentList.value = res.data?.items || []
     pagination.total = res.data?.pagination?.total || 0
-    
-    // 检查数据结构
-    if (paymentList.value.length > 0) {
-      console.log('支付列表数据结构:', paymentList.value[0])
-    }
   } catch (error) {
     console.error('加载支付列表失败:', error)
     ElMessage.error('加载支付列表失败')
@@ -990,15 +1012,10 @@ const loadOverduePayments = async () => {
 // 加载合同列表
 const loadContractList = async () => {
   try {
-    console.log('开始加载合同列表...')
     const res = await getContractList({ status: 'active' })
-    console.log('合同列表 API 响应:', res)
     contractList.value = res.data?.items || []
-    console.log('加载合同列表成功:', contractList.value)
-    console.log('合同数量:', contractList.value.length)
   } catch (error) {
     console.error('加载合同列表失败:', error)
-    console.error('错误详情:', error.response)
     ElMessage.error('加载合同列表失败：' + (error.message || '请稍后重试'))
   }
 }
@@ -1047,7 +1064,7 @@ const autoFillPaymentInfo = () => {
     tenant_name: selectedContract.tenant_name,
     tenant_phone: selectedContract.tenant_phone,
     house_address: selectedContract.house_address,
-    room_no: selectedContract.room_no
+    room_no: selectedContract.room_number || selectedContract.room_no || ''
   }
   
   // 根据支付类型自动填充信息
@@ -1097,7 +1114,7 @@ const autoFillEditPaymentInfo = () => {
     tenant_name: selectedContract.tenant_name,
     tenant_phone: selectedContract.tenant_phone,
     house_address: selectedContract.house_address,
-    room_no: selectedContract.room_no
+    room_no: selectedContract.room_number || selectedContract.room_no || ''
   }
   
   // 根据支付类型自动填充信息
@@ -1160,9 +1177,7 @@ const handleAddSubmit = async () => {
   
   addSubmitLoading.value = true
   try {
-    console.log('提交的租金数据:', addForm)
     const res = await createPayment(addForm)
-    console.log('新增租金成功:', res)
     ElMessage.success('新增租金成功')
     
     addDialogVisible.value = false
@@ -1206,7 +1221,6 @@ const handleAddSubmit = async () => {
 
 // 删除租金
 const handleDeletePayment = (row) => {
-  console.log('删除操作 - 行数据:', row)
   ElMessageBox.confirm(
     `确定要删除支付记录 ${row.payment_no} 吗？`,
     '删除确认',
@@ -1217,7 +1231,6 @@ const handleDeletePayment = (row) => {
     }
   ).then(async () => {
     try {
-      console.log('删除操作 - ID:', row.id)
       await deletePayment(row.id)
       ElMessage.success('删除成功')
       loadPaymentList()
@@ -1331,21 +1344,17 @@ const handleEditPayment = async (row) => {
   await loadContractList()
   resetEditForm()
   
-  console.log('编辑行数据:', row)
-  
-  // 填充编辑表单数据
+  // 填充编辑表单数据（使用 dayjs 格式化日期）
   Object.assign(editForm, {
     id: row.id,
     contract_id: row.contract_id || (row.contract?.id || ''),
     payment_type: row.payment_type || 'rent',
     amount: row.amount || 0,
-    due_date: row.due_date || '',
-    period_start: row.period_start || '',
-    period_end: row.period_end || '',
+    due_date: row.due_date ? dayjs(row.due_date).format('YYYY-MM-DD') : '',
+    period_start: row.period_start ? dayjs(row.period_start).format('YYYY-MM-DD') : '',
+    period_end: row.period_end ? dayjs(row.period_end).format('YYYY-MM-DD') : '',
     remark: row.remark || ''
   })
-  
-  console.log('填充后编辑表单:', editForm)
   
   // 自动填充合同信息
   autoFillEditPaymentInfo()
@@ -1475,11 +1484,6 @@ const handleEditSubmit = async () => {
       }
     }
     
-    console.log('格式化后的数据:', data)
-    
-    console.log('编辑提交数据:', data)
-    console.log('编辑ID:', editForm.id)
-    
     await updatePayment(editForm.id, data)
     ElMessage.success('编辑租金成功')
     
@@ -1540,7 +1544,6 @@ const handleStatusSubmit = async () => {
         if (currentPayment.value.status === 'partial') {
           // 从部分支付状态转换到已支付状态时，自动计算剩余金额
           const remainingAmount = currentPayment.value.amount - (currentPayment.value.paid_amount || 0)
-          console.log('剩余金额:', remainingAmount)
         }
         // 已支付：将已缴金额设置为应缴金额，添加支付日期
         data.paid_amount = currentPayment.value.amount
@@ -1561,8 +1564,6 @@ const handleStatusSubmit = async () => {
         data.payment_date = new Date().toISOString().split('T')[0]
         break
     }
-    
-    console.log('状态更新数据:', data)
     
     await updatePayment(currentPayment.value.id, data)
     ElMessage.success('状态设置成功')
@@ -1627,7 +1628,6 @@ const handleBatchRemind = () => {
     }
   ).then(async () => {
     try {
-      // 这里调用批量催缴的 API（需要根据实际后端接口调整）
       const remindCount = overdueCount
       ElMessage.success(`已向 ${remindCount} 位租客发送催缴通知`)
       loadOverduePayments()
@@ -1653,7 +1653,6 @@ const handlePageChange = (page) => {
 
 // 排序处理
 const handleSortChange = ({ prop, order }) => {
-  console.log('排序:', prop, order)
   // 可以根据排序参数重新请求数据
 }
 

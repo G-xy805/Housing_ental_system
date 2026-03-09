@@ -466,3 +466,21 @@ def format_error_response(error_code: str, message: str, details: Dict = None) -
         response['data'] = details
     
     return response
+
+
+def error_response(message: str, status_code: int = 400, error_code: str = None) -> tuple:
+    """
+    简化的错误响应函数
+    
+    Args:
+        message: 错误消息
+        status_code: HTTP 状态码
+        error_code: 错误代码（可选）
+        
+    Returns:
+        tuple: (response, status_code)
+    """
+    if error_code is None:
+        error_code = 'error'
+    
+    return APIResponse.error(error_code, message, status_code)

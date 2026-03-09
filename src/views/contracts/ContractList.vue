@@ -2,10 +2,16 @@
   <div class="contract-list-page">
     <div class="page-header">
       <h2>租客合同管理</h2>
-      <el-button type="primary" @click="handleAdd" v-if="hasPermission('create')">
-        <el-icon><Plus /></el-icon>
-        新建合同
-      </el-button>
+      <div class="header-buttons">
+        <el-button type="primary" @click="handleAdd" v-if="hasPermission('create')">
+          <el-icon><Plus /></el-icon>
+          新建合同
+        </el-button>
+        <el-button type="danger" @click="handleBatchTerminate" :disabled="selectedContracts.length === 0" v-if="hasPermission('edit')">
+          <el-icon><Close /></el-icon>
+          批量终止合同
+        </el-button>
+      </div>
     </div>
 
     <!-- 即将到期提醒 -->
@@ -83,7 +89,9 @@
         style="width: 100%"
         v-loading="loading"
         @sort-change="handleSortChange"
+        @selection-change="handleSelectionChange"
       >
+        <el-table-column type="selection" width="55" />
         <el-table-column prop="contract_no" label="合同编号" min-width="160" sortable />
         <el-table-column prop="tenant_name" label="租客姓名" width="90" />
         <el-table-column prop="house_address" label="房源地址" min-width="180" show-overflow-tooltip />
@@ -325,7 +333,23 @@
           </el-select>
         </el-form-item>
 
-        <!-- 房间选择已移除，系统只支持整租房源 -->
+        <el-form-item v-if="showRoomSelect" label="房间" prop="room_id">
+          <el-select
+            v-model="contractForm.room_id"
+            placeholder="请选择房间"
+            filterable
+            style="width: 100%"
+            :disabled="isViewMode"
+            @change="handleRoomChange"
+          >
+            <el-option
+              v-for="room in roomOptions"
+              :key="room.id"
+              :label="room.room_number"
+              :value="room.id"
+            />
+          </el-select>
+        </el-form-item>
 
         <el-form-item label="租期" prop="lease_term">
           <el-date-picker
@@ -555,7 +579,8 @@ import {
   deleteContract,
   activateContract,
   terminateContract,
-  renewContract
+  renewContract,
+  batchUpdateStatus
 } from '@/api/contract'
 import { getTenantList } from '@/api/tenant'
 import { getHouseList, getHouseDetail } from '@/api/house'
@@ -565,6 +590,7 @@ import dayjs from 'dayjs'
 
 const loading = ref(false)
 const contractList = ref([])
+const selectedContracts = ref([])
 const dialogVisible = ref(false)
 const detailVisible = ref(false)
 const renewVisible = ref(false)
@@ -603,6 +629,7 @@ const contractForm = reactive({
   title: '',
   tenant_id: null,
   house_id: null,
+  room_id: null,
   lease_term: [],
   rent_amount: 0,
   deposit_amount: 0,
@@ -618,11 +645,26 @@ const renewForm = reactive({
   remark: ''
 })
 
+// 显示房间选择的计算属性
+const showRoomSelect = ref(false)
+
 // 表单验证规则
 const formRules = {
   title: [{ required: true, message: '请输入合同标题', trigger: 'blur' }],
   tenant_id: [{ required: true, message: '请选择租客', trigger: 'change' }],
   house_id: [{ required: true, message: '请选择房源', trigger: 'change' }],
+  room_id: [{
+    required: true,
+    message: '请选择房间',
+    trigger: 'change',
+    validator: (rule, value, callback) => {
+      if (showRoomSelect.value && !value) {
+        callback(new Error('请选择房间'))
+      } else {
+        callback()
+      }
+    }
+  }],
   lease_term: [
     {
       required: true,
@@ -778,6 +820,42 @@ const handleTerminateSubmit = async () => {
   }
 }
 
+// 选择变化处理
+const handleSelectionChange = (selection) => {
+  selectedContracts.value = selection
+}
+
+// 批量终止合同
+const handleBatchTerminate = () => {
+  if (selectedContracts.value.length === 0) {
+    ElMessage.warning('请先选择要终止的合同')
+    return
+  }
+  
+  const count = selectedContracts.value.length
+  
+  ElMessageBox.confirm(
+    `确定要终止选中的 ${count} 份合同吗？此操作不可恢复。`,
+    '批量终止合同确认',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(async () => {
+    try {
+      const ids = selectedContracts.value.map(item => item.id)
+      await batchUpdateStatus({ ids, status: 'terminated' })
+      ElMessage.success(`成功终止 ${count} 份合同`)
+      selectedContracts.value = []
+      loadContractList()
+    } catch (error) {
+      console.error('批量终止失败:', error)
+      ElMessage.error('批量终止失败：' + (error.message || '请稍后重试'))
+    }
+  }).catch(() => {})
+}
+
 // 激活合同
 const handleActivate = async (row) => {
   submitLoading.value = true
@@ -857,12 +935,15 @@ const resetForm = () => {
   Object.assign(contractForm, {
     tenant_id: null,
     house_id: null,
+    room_id: null,
     lease_term: [],
     rent_amount: 0,
     deposit_amount: 0,
     payment_method: 'press_one_pay_three',
     remark: ''
   })
+  showRoomSelect.value = false
+  roomOptions.value = []
 }
 
 // 重置续签表单
@@ -891,7 +972,7 @@ const loadTenantOptions = async () => {
 // 加载房源选项
 const loadHouseOptions = async () => {
   try {
-    const res = await getHouseList({ page: 1, per_page: 100, rental_type: 'whole' })
+    const res = await getHouseList({ page: 1, per_page: 100 })
     houseOptions.value = res.data?.items || []
   } catch (error) {
     console.error('加载房源列表失败:', error)
@@ -900,7 +981,12 @@ const loadHouseOptions = async () => {
 
 // 房源变化时加载信息
 const handleHouseChange = async (houseId) => {
-  if (!houseId) return
+  if (!houseId) {
+    showRoomSelect.value = false
+    roomOptions.value = []
+    contractForm.room_id = null
+    return
+  }
   
   try {
     // 调用房源详情接口获取房源数据
@@ -909,12 +995,43 @@ const handleHouseChange = async (houseId) => {
       // 记录房源信息
       const houseData = res.data
       
-      // 设置默认租金和押金
-      contractForm.rent_amount = houseData.rent_price || 0
-      contractForm.deposit_amount = houseData.deposit || 0
+      // 根据房源类型决定是否显示房间选择
+      showRoomSelect.value = houseData.rental_type === 'shared'
+      
+      if (showRoomSelect.value) {
+        // 加载房间列表
+        roomOptions.value = houseData.rooms || []
+        contractForm.room_id = null
+        contractForm.rent_amount = 0
+        contractForm.deposit_amount = 0
+      } else {
+        // 整租房源直接设置租金和押金
+        roomOptions.value = []
+        contractForm.room_id = null
+        contractForm.rent_amount = houseData.rent_price || 0
+        contractForm.deposit_amount = houseData.deposit || 0
+      }
     }
   } catch (error) {
     console.error('加载房源详情失败:', error)
+    showRoomSelect.value = false
+    roomOptions.value = []
+  }
+}
+
+// 房间变化时自动填充租金和押金
+const handleRoomChange = (roomId) => {
+  if (!roomId) {
+    contractForm.rent_amount = 0
+    contractForm.deposit_amount = 0
+    return
+  }
+  
+  // 查找选中的房间
+  const selectedRoom = roomOptions.value.find(room => room.id === roomId)
+  if (selectedRoom) {
+    contractForm.rent_amount = selectedRoom.rent_price || 0
+    contractForm.deposit_amount = selectedRoom.deposit || 0
   }
 }
 
@@ -952,12 +1069,18 @@ const handleEdit = async (row) => {
       title: row.title || '',
       tenant_id: row.tenant_id || null,
       house_id: row.house_id || null,
+      room_id: row.room_id || null,
       lease_term: row.start_date && row.end_date ? [row.start_date, row.end_date] : [],
       rent_amount: parseFloat(row.rent_amount) || 0,
       deposit_amount: parseFloat(row.deposit_amount || row.deposit) || 0,
       payment_method: getPaymentMethodValue(row.payment_type || row.payment_method),
       remark: row.remark || ''
     })
+    
+    // 触发房源变化，以正确显示/隐藏房间选择
+    if (row.house_id) {
+      handleHouseChange(row.house_id)
+    }
   
   dialogVisible.value = true
 }
@@ -1003,6 +1126,7 @@ const handleSubmit = async () => {
       title: contractForm.title,
       tenant_id: contractForm.tenant_id,
       house_id: contractForm.house_id,
+      room_id: contractForm.room_id,
       start_date: contractForm.lease_term[0],
       end_date: contractForm.lease_term[1],
       rent_amount: contractForm.rent_amount,
@@ -1101,7 +1225,7 @@ const handlePageChange = (page) => {
 
 // 排序处理
 const handleSortChange = ({ prop, order }) => {
-  console.log('排序:', prop, order)
+  // 可以根据排序参数重新请求数据
 }
 
 // 初始化
@@ -1126,6 +1250,11 @@ onMounted(() => {
       margin: 0;
       color: #333;
       font-size: 24px;
+    }
+
+    .header-buttons {
+      display: flex;
+      gap: 10px;
     }
   }
 

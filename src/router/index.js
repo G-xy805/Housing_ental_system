@@ -37,25 +37,13 @@ const routes = [
         path: 'dashboard',
         name: 'Dashboard',
         component: () => import('@/views/Dashboard.vue'),
-        meta: { title: '仪表盘', icon: 'dashboard', requiresAuth: true }
-      },
-      {
-        path: 'landlords',
-        name: 'Landlords',
-        component: () => import('@/views/landlords/LandlordList.vue'),
-        meta: { title: '房东管理', icon: 'landlords', requiresAuth: true }
-      },
-      {
-        path: 'landlord-contracts',
-        name: 'LandlordContracts',
-        component: () => import('@/views/landlord-contracts/ContractList.vue'),
-        meta: { title: '房东合同管理', icon: 'contracts', requiresAuth: true }
+        meta: { title: '仪表盘', icon: 'dashboard', requiresAuth: true, standalone: true }
       },
       {
         path: 'houses',
         name: 'Houses',
         component: () => import('@/views/houses/HouseList.vue'),
-        meta: { title: '房源管理', icon: 'houses', requiresAuth: true }
+        meta: { title: '房源管理', icon: 'houses', requiresAuth: true, group: 'property', groupTitle: '房源管理', groupIcon: 'house' }
       },
       {
         path: 'houses/:id',
@@ -64,46 +52,64 @@ const routes = [
         meta: { title: '房源详情', hidden: true, requiresAuth: true }
       },
       {
+        path: 'landlords',
+        name: 'Landlords',
+        component: () => import('@/views/landlords/LandlordList.vue'),
+        meta: { title: '房东管理', icon: 'landlords', requiresAuth: true, group: 'customer', groupTitle: '客户管理', groupIcon: 'user' }
+      },
+      {
         path: 'tenants',
         name: 'Tenants',
         component: () => import('@/views/tenants/TenantList.vue'),
-        meta: { title: '租客管理', icon: 'tenants', requiresAuth: true }
+        meta: { title: '租客管理', icon: 'tenants', requiresAuth: true, group: 'customer', groupTitle: '客户管理', groupIcon: 'user' }
+      },
+      {
+        path: 'landlord-contracts',
+        name: 'LandlordContracts',
+        component: () => import('@/views/landlord-contracts/ContractList.vue'),
+        meta: { title: '房东合同管理', icon: 'contracts', requiresAuth: true, group: 'contract', groupTitle: '合同管理', groupIcon: 'document' }
       },
       {
         path: 'contracts',
         name: 'Contracts',
         component: () => import('@/views/contracts/ContractList.vue'),
-        meta: { title: '租客合同管理', icon: 'contracts', requiresAuth: true }
+        meta: { title: '租客合同管理', icon: 'contracts', requiresAuth: true, group: 'contract', groupTitle: '合同管理', groupIcon: 'document' }
       },
       {
         path: 'payments',
         name: 'Payments',
         component: () => import('@/views/payments/PaymentList.vue'),
-        meta: { title: '租金管理', icon: 'payments', requiresAuth: true }
+        meta: { title: '租金管理', icon: 'payments', requiresAuth: true, group: 'finance', groupTitle: '财务管理', groupIcon: 'money' }
+      },
+      {
+        path: 'deposit-refunds',
+        name: 'DepositRefunds',
+        component: () => import('@/views/deposit-refunds/DepositRefundList.vue'),
+        meta: { title: '押金退款管理', icon: 'deposit-refunds', requiresAuth: true, group: 'finance', groupTitle: '财务管理', groupIcon: 'money' }
       },
       {
         path: 'employees',
         name: 'Employees',
         component: () => import('@/views/employees/EmployeeList.vue'),
-        meta: { title: '员工管理', icon: 'employees', requiresAuth: true, requiresAdmin: true }
+        meta: { title: '员工管理', icon: 'employees', requiresAuth: true, requiresAdmin: true, group: 'system', groupTitle: '系统管理', groupIcon: 'setting' }
       },
       {
         path: 'backup',
         name: 'Backup',
         component: () => import('@/views/backup/BackupList.vue'),
-        meta: { title: '数据备份', icon: 'backup', requiresAuth: true, requiresAdmin: true }
+        meta: { title: '数据备份', icon: 'backup', requiresAuth: true, requiresAdmin: true, group: 'system', groupTitle: '系统管理', groupIcon: 'setting' }
       },
       {
         path: 'audit',
         name: 'Audit',
         component: () => import('@/views/audit/AuditList.vue'),
-        meta: { title: '审计日志', icon: 'audit', requiresAuth: true, requiresAdmin: true }
+        meta: { title: '审计日志', icon: 'audit', requiresAuth: true, requiresAdmin: true, group: 'system', groupTitle: '系统管理', groupIcon: 'setting' }
       },
       {
         path: 'monitoring',
         name: 'Monitoring',
         component: () => import('@/views/monitoring/MonitoringDashboard.vue'),
-        meta: { title: '系统监控', icon: 'monitoring', requiresAuth: true, requiresAdmin: true }
+        meta: { title: '系统监控', icon: 'monitoring', requiresAuth: true, requiresAdmin: true, group: 'system', groupTitle: '系统管理', groupIcon: 'setting' }
       },
       {
         path: 'profile',

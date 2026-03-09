@@ -8,6 +8,7 @@
 4. 自动清理过期备份
 5. 备份完整性验证
 6. 备份恢复功能
+7. 数据归档功能（合同和支付记录）
 
 安全特性：
 - 使用 AES-256-GCM 加密算法
@@ -21,7 +22,8 @@ import shutil
 import zipfile
 import hashlib
 import sqlite3
-from datetime import datetime, timedelta
+import time
+from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -921,6 +923,434 @@ class BackupManager:
             logger.warning(f"读取备份元数据失败: {str(e)}")
         
         return metadata
+    
+    # ==================== 数据归档功能 ====================
+    
+    def archive_contracts(
+        self,
+        months_retention: int = 12,
+        batch_size: int = 100,
+        dry_run: bool = False
+    ) -> Dict[str, Any]:
+        """
+        归档过期合同
+        
+        将超过保留期限的已过期或已终止合同归档
+        
+        Args:
+            months_retention: 保留月数（默认12个月）
+            batch_size: 批量处理大小
+            dry_run: 是否为预览模式（不实际执行）
+        
+        Returns:
+            Dict: 归档结果
+        """
+        from app import db
+        from app.models.contract import Contract
+        from app.models.archive import ContractArchive, ArchiveRecord
+        
+        logger.info(f"开始归档合同（保留 {months_retention} 个月）...")
+        
+        # 计算归档截止日期
+        cutoff_date = date.today() - timedelta(days=months_retention * 30)
+        
+        # 创建归档记录
+        archive_record = ArchiveRecord(
+            archive_type='contract',
+            archive_date=date.today(),
+            archive_reason='auto_archive',
+            date_range_start=None,
+            date_range_end=cutoff_date,
+            started_at=datetime.now()
+        )
+        
+        if not dry_run:
+            db.session.add(archive_record)
+            db.session.commit()
+        
+        total = 0
+        archived = 0
+        failed = 0
+        errors = []
+        
+        try:
+            # 查询符合条件的合同
+            # 状态为 expired 或 terminated，且结束日期早于截止日期
+            query = Contract.query.filter(
+                Contract.status.in_(['expired', 'terminated']),
+                Contract.end_date < cutoff_date,
+                Contract.deleted_at.is_(None)
+            )
+            
+            total = query.count()
+            logger.info(f"找到 {total} 个待归档合同")
+            
+            if dry_run:
+                # 预览模式，只返回统计信息
+                return {
+                    'dry_run': True,
+                    'total': total,
+                    'cutoff_date': cutoff_date.strftime('%Y-%m-%d'),
+                    'contracts': [
+                        {
+                            'id': c.id,
+                            'contract_no': c.contract_no,
+                            'end_date': c.end_date.strftime('%Y-%m-%d'),
+                            'status': c.status
+                        }
+                        for c in query.limit(10).all()
+                    ]
+                }
+            
+            # 分批处理
+            offset = 0
+            while offset < total:
+                contracts = query.offset(offset).limit(batch_size).all()
+                
+                for contract in contracts:
+                    try:
+                        # 创建归档记录
+                        archive = ContractArchive.archive_from_contract(
+                            contract,
+                            archive_reason='auto_archive'
+                        )
+                        db.session.add(archive)
+                        
+                        # 硬删除原合同（归档后不再需要）
+                        db.session.delete(contract)
+                        
+                        archived += 1
+                        
+                    except Exception as e:
+                        failed += 1
+                        error_msg = f"归档合同 {contract.id} 失败: {str(e)}"
+                        errors.append(error_msg)
+                        logger.error(error_msg)
+                
+                # 提交批次
+                db.session.commit()
+                
+                # 更新进度
+                archive_record.archived_records = archived
+                archive_record.failed_records = failed
+                db.session.commit()
+                
+                offset += batch_size
+                
+                # 短暂延迟，避免数据库压力
+                time.sleep(0.1)
+            
+            # 更新归档记录
+            archive_record.total_records = total
+            archive_record.archived_records = archived
+            archive_record.failed_records = failed
+            archive_record.completed_at = datetime.now()
+            archive_record.execution_time = (
+                archive_record.completed_at - archive_record.started_at
+            ).total_seconds()
+            
+            if errors:
+                archive_record.error_message = '\n'.join(errors[:10])  # 只保存前10条错误
+            
+            db.session.commit()
+            
+            logger.info(
+                f"合同归档完成 - "
+                f"总数: {total}, "
+                f"已归档: {archived}, "
+                f"失败: {failed}"
+            )
+            
+        except Exception as e:
+            logger.error(f"合同归档异常: {str(e)}")
+            archive_record.error_message = str(e)
+            archive_record.completed_at = datetime.now()
+            db.session.commit()
+            raise
+        
+        return {
+            'total': total,
+            'archived': archived,
+            'failed': failed,
+            'cutoff_date': cutoff_date.strftime('%Y-%m-%d'),
+            'execution_time': archive_record.execution_time
+        }
+    
+    def archive_payments(
+        self,
+        months_retention: int = 12,
+        batch_size: int = 100,
+        dry_run: bool = False
+    ) -> Dict[str, Any]:
+        """
+        归档支付记录
+        
+        将超过保留期限的已完成或已取消支付记录归档
+        
+        Args:
+            months_retention: 保留月数（默认12个月）
+            batch_size: 批量处理大小
+            dry_run: 是否为预览模式（不实际执行）
+        
+        Returns:
+            Dict: 归档结果
+        """
+        from app import db
+        from app.models.payment import Payment
+        from app.models.archive import PaymentArchive, ArchiveRecord
+        
+        logger.info(f"开始归档支付记录（保留 {months_retention} 个月）...")
+        
+        # 计算归档截止日期
+        cutoff_date = date.today() - timedelta(days=months_retention * 30)
+        
+        # 创建归档记录
+        archive_record = ArchiveRecord(
+            archive_type='payment',
+            archive_date=date.today(),
+            archive_reason='auto_archive',
+            date_range_start=None,
+            date_range_end=cutoff_date,
+            started_at=datetime.now()
+        )
+        
+        if not dry_run:
+            db.session.add(archive_record)
+            db.session.commit()
+        
+        total = 0
+        archived = 0
+        failed = 0
+        errors = []
+        
+        try:
+            # 查询符合条件的支付记录
+            # 状态为 paid, cancelled 或 refunded，且支付日期早于截止日期
+            query = Payment.query.filter(
+                Payment.status.in_(['paid', 'cancelled', 'refunded']),
+                Payment.payment_date < cutoff_date,
+                Payment.deleted_at.is_(None)
+            )
+            
+            total = query.count()
+            logger.info(f"找到 {total} 个待归档支付记录")
+            
+            if dry_run:
+                # 预览模式，只返回统计信息
+                return {
+                    'dry_run': True,
+                    'total': total,
+                    'cutoff_date': cutoff_date.strftime('%Y-%m-%d'),
+                    'payments': [
+                        {
+                            'id': p.id,
+                            'payment_no': p.payment_no,
+                            'payment_date': p.payment_date.strftime('%Y-%m-%d') if p.payment_date else None,
+                            'status': p.status,
+                            'amount': float(p.amount)
+                        }
+                        for p in query.limit(10).all()
+                    ]
+                }
+            
+            # 分批处理
+            offset = 0
+            while offset < total:
+                payments = query.offset(offset).limit(batch_size).all()
+                
+                for payment in payments:
+                    try:
+                        # 创建归档记录
+                        archive = PaymentArchive.archive_from_payment(
+                            payment,
+                            archive_reason='auto_archive'
+                        )
+                        db.session.add(archive)
+                        
+                        # 硬删除原支付记录（归档后不再需要）
+                        db.session.delete(payment)
+                        
+                        archived += 1
+                        
+                    except Exception as e:
+                        failed += 1
+                        error_msg = f"归档支付记录 {payment.id} 失败: {str(e)}"
+                        errors.append(error_msg)
+                        logger.error(error_msg)
+                
+                # 提交批次
+                db.session.commit()
+                
+                # 更新进度
+                archive_record.archived_records = archived
+                archive_record.failed_records = failed
+                db.session.commit()
+                
+                offset += batch_size
+                
+                # 短暂延迟，避免数据库压力
+                time.sleep(0.1)
+            
+            # 更新归档记录
+            archive_record.total_records = total
+            archive_record.archived_records = archived
+            archive_record.failed_records = failed
+            archive_record.completed_at = datetime.now()
+            archive_record.execution_time = (
+                archive_record.completed_at - archive_record.started_at
+            ).total_seconds()
+            
+            if errors:
+                archive_record.error_message = '\n'.join(errors[:10])  # 只保存前10条错误
+            
+            db.session.commit()
+            
+            logger.info(
+                f"支付记录归档完成 - "
+                f"总数: {total}, "
+                f"已归档: {archived}, "
+                f"失败: {failed}"
+            )
+            
+        except Exception as e:
+            logger.error(f"支付记录归档异常: {str(e)}")
+            archive_record.error_message = str(e)
+            archive_record.completed_at = datetime.now()
+            db.session.commit()
+            raise
+        
+        return {
+            'total': total,
+            'archived': archived,
+            'failed': failed,
+            'cutoff_date': cutoff_date.strftime('%Y-%m-%d'),
+            'execution_time': archive_record.execution_time
+        }
+    
+    def archive_all(
+        self,
+        months_retention: int = 12,
+        batch_size: int = 100,
+        dry_run: bool = False
+    ) -> Dict[str, Any]:
+        """
+        执行完整归档（合同和支付记录）
+        
+        Args:
+            months_retention: 保留月数（默认12个月）
+            batch_size: 批量处理大小
+            dry_run: 是否为预览模式（不实际执行）
+        
+        Returns:
+            Dict: 归档结果
+        """
+        logger.info("开始执行完整归档...")
+        
+        start_time = time.time()
+        
+        results = {
+            'contracts': None,
+            'payments': None,
+            'total_archived': 0,
+            'total_failed': 0,
+            'execution_time': 0
+        }
+        
+        try:
+            # 归档合同
+            results['contracts'] = self.archive_contracts(
+                months_retention=months_retention,
+                batch_size=batch_size,
+                dry_run=dry_run
+            )
+            
+            # 归档支付记录
+            results['payments'] = self.archive_payments(
+                months_retention=months_retention,
+                batch_size=batch_size,
+                dry_run=dry_run
+            )
+            
+            # 汇总结果
+            if not dry_run:
+                results['total_archived'] = (
+                    results['contracts']['archived'] + 
+                    results['payments']['archived']
+                )
+                results['total_failed'] = (
+                    results['contracts']['failed'] + 
+                    results['payments']['failed']
+                )
+            
+            results['execution_time'] = time.time() - start_time
+            
+            logger.info(
+                f"完整归档完成 - "
+                f"总归档: {results['total_archived']}, "
+                f"总失败: {results['total_failed']}, "
+                f"耗时: {results['execution_time']:.2f}秒"
+            )
+            
+        except Exception as e:
+            logger.error(f"完整归档异常: {str(e)}")
+            raise
+        
+        return results
+    
+    def get_archive_statistics(self) -> Dict[str, Any]:
+        """
+        获取归档统计信息
+        
+        Returns:
+            Dict: 统计信息
+        """
+        from app.models.archive import ContractArchive, PaymentArchive, ArchiveRecord
+        
+        try:
+            # 合同归档统计
+            contract_count = ContractArchive.query.count()
+            oldest_contract = ContractArchive.query.order_by(
+                ContractArchive.archived_at.asc()
+            ).first()
+            newest_contract = ContractArchive.query.order_by(
+                ContractArchive.archived_at.desc()
+            ).first()
+            
+            # 支付记录归档统计
+            payment_count = PaymentArchive.query.count()
+            oldest_payment = PaymentArchive.query.order_by(
+                PaymentArchive.archived_at.asc()
+            ).first()
+            newest_payment = PaymentArchive.query.order_by(
+                PaymentArchive.archived_at.desc()
+            ).first()
+            
+            # 最近归档操作
+            recent_archives = ArchiveRecord.query.order_by(
+                ArchiveRecord.created_at.desc()
+            ).limit(10).all()
+            
+            return {
+                'contracts': {
+                    'total': contract_count,
+                    'oldest_archived': oldest_contract.archived_at.strftime('%Y-%m-%d %H:%M:%S') if oldest_contract else None,
+                    'newest_archived': newest_contract.archived_at.strftime('%Y-%m-%d %H:%M:%S') if newest_contract else None
+                },
+                'payments': {
+                    'total': payment_count,
+                    'oldest_archived': oldest_payment.archived_at.strftime('%Y-%m-%d %H:%M:%S') if oldest_payment else None,
+                    'newest_archived': newest_payment.archived_at.strftime('%Y-%m-%d %H:%M:%S') if newest_payment else None
+                },
+                'recent_operations': [r.to_dict() for r in recent_archives]
+            }
+            
+        except Exception as e:
+            logger.error(f"获取归档统计失败: {str(e)}")
+            return {
+                'contracts': {'total': 0},
+                'payments': {'total': 0},
+                'recent_operations': []
+            }
 
 
 # 全局备份管理器实例

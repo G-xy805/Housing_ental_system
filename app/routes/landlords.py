@@ -34,7 +34,7 @@ def validate_id_card(id_card: str) -> tuple:
         tuple: (是否有效，错误消息)
     """
     if not id_card:
-        return False, '身份证号不能为空'
+        return True, None
     
     id_card = id_card.strip()
     
@@ -101,17 +101,17 @@ def validate_landlord_data(data: Dict, is_update: bool = False) -> tuple:
         else:
             validated_data['name'] = data['name'].strip()
     
-    # 身份证号（必填）
+    # 身份证号（可选）
     if not is_update or 'id_card' in data:
-        if not data.get('id_card'):
-            errors.append('身份证号不能为空')
-        else:
+        if data.get('id_card'):
             id_card = data['id_card'].strip()
             is_valid, error_msg = validate_id_card(id_card)
             if not is_valid:
                 errors.append(error_msg)
             else:
                 validated_data['id_card'] = id_card
+        else:
+            validated_data['id_card'] = None
     
     # 手机号（必填）
     if not is_update or 'phone' in data:
@@ -207,9 +207,9 @@ def format_landlord_response(landlord: Landlord, include_details: bool = False) 
 
 def check_id_card_duplicate(id_card: str, exclude_id: int = None) -> Optional[Landlord]:
     """
-    检查身份证号是否已存在（使用加密存储）
+    检查身份证号是否已存在（使用哈希值快速查询）
     
-    由于 AES-GCM 加密每次生成不同的密文，需要遍历解密比较
+    性能优化：使用 SHA-256 哈希值进行快速查重，无需遍历解密所有记录
     
     Args:
         id_card: 身份证号
@@ -218,32 +218,19 @@ def check_id_card_duplicate(id_card: str, exclude_id: int = None) -> Optional[La
     Returns:
         Landlord or None: 如果存在则返回房东对象
     """
-    from app.utils.aes_encryption import decrypt_sensitive_data
+    from app.models.landlord import calculate_id_card_hash
     
-    # 获取所有房东
-    query = Landlord.query
+    # 计算身份证号的哈希值
+    id_card_hash = calculate_id_card_hash(id_card)
+    if not id_card_hash:
+        return None
+    
+    # 使用哈希值进行快速查询
+    query = Landlord.query.filter(Landlord.id_card_hash == id_card_hash)
     if exclude_id:
         query = query.filter(Landlord.id != exclude_id)
     
-    landlords = query.all()
-    
-    # 遍历比较解密后的身份证号
-    for landlord in landlords:
-        if landlord.id_card_encrypted:
-            try:
-                decrypted = decrypt_sensitive_data(
-                    encrypted_data=landlord.id_card_encrypted,
-                    field_name='id_card',
-                    model_name='Landlord',
-                    record_id=landlord.id,
-                    skip_audit=True
-                )
-                if decrypted == id_card:
-                    return landlord
-            except:
-                continue
-    
-    return None
+    return query.first()
 
 
 # ============================================================================
@@ -444,17 +431,18 @@ def create_landlord():
         if not is_valid:
             return APIResponse.validation_error(error_msg)
         
-        # 检查身份证号是否重复
-        existing_landlord = check_id_card_duplicate(validated_data['id_card'])
-        if existing_landlord:
-            return APIResponse.bad_request("该身份证号已登记在其他房东名下")
+        # 检查身份证号是否重复（如果提供了身份证号）
+        if validated_data['id_card']:
+            existing_landlord = check_id_card_duplicate(validated_data['id_card'])
+            if existing_landlord:
+                return APIResponse.bad_request("该身份证号已登记在其他房东名下")
         
         # 创建房东（排除需要加密的字段）
         landlord_data = {k: v for k, v in validated_data.items() if k not in ['id_card', 'bank_card']}
         landlord = Landlord(**landlord_data)
         
         # 设置身份证号（会自动加密存储）
-        if 'id_card' in validated_data:
+        if validated_data['id_card']:
             landlord.set_id_card(validated_data['id_card'])
         
         # 设置银行卡号（会自动加密存储）
@@ -527,7 +515,7 @@ def update_landlord(landlord_id: int):
             return APIResponse.validation_error(error_msg)
         
         # 检查身份证号是否重复（排除自己）
-        if 'id_card' in validated_data:
+        if 'id_card' in validated_data and validated_data['id_card']:
             existing_landlord = check_id_card_duplicate(validated_data['id_card'], exclude_id=landlord_id)
             if existing_landlord:
                 return APIResponse.bad_request("该身份证号已登记在其他房东名下")
@@ -876,6 +864,8 @@ def search_landlords():
     高级搜索房东
     
     Query Parameters:
+        keyword: 关键词（搜索姓名和手机号）
+        q: 关键词（兼容参数，等同于keyword）
         name: 姓名
         phone: 手机号
         id_card: 身份证号
@@ -902,15 +892,26 @@ def search_landlords():
         
         query = db.session.query(Landlord).filter(Landlord.deleted_at.is_(None))
         
-        # 姓名搜索
-        name = request.args.get('name')
-        if name:
-            query = query.filter(Landlord.name.ilike(f'%{name}%'))
-        
-        # 手机号搜索
-        phone = request.args.get('phone')
-        if phone:
-            query = query.filter(Landlord.phone.ilike(f'%{phone}%'))
+        # 关键词搜索（优先使用keyword，兼容q参数）
+        keyword = request.args.get('keyword') or request.args.get('q')
+        if keyword:
+            # 同时搜索姓名和手机号
+            query = query.filter(
+                db.or_(
+                    Landlord.name.ilike(f'%{keyword}%'),
+                    Landlord.phone.ilike(f'%{keyword}%')
+                )
+            )
+        else:
+            # 姓名搜索
+            name = request.args.get('name')
+            if name:
+                query = query.filter(Landlord.name.ilike(f'%{name}%'))
+            
+            # 手机号搜索
+            phone = request.args.get('phone')
+            if phone:
+                query = query.filter(Landlord.phone.ilike(f'%{phone}%'))
         
         # 注意：身份证号已加密存储，无法直接搜索
         

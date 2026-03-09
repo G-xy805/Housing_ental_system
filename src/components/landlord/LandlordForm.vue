@@ -192,14 +192,13 @@ const defaultFormData = {
 
 const formData = reactive({ ...defaultFormData })
 
-// 表单验证规则（动态生成，编辑模式下身份证号不必填）
+// 表单验证规则（身份证号不再必填）
 const formRules = computed(() => ({
   name: [
     { required: true, message: '请输入房东姓名', trigger: 'blur' },
     { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
   ],
   id_card: [
-    { required: !props.isEdit, message: '请输入身份证号', trigger: 'blur' },
     {
       validator: (rule, value, callback) => {
         // 编辑模式下，如果值为脱敏格式（包含*），跳过验证
@@ -208,11 +207,7 @@ const formRules = computed(() => ({
           return
         }
         if (!value) {
-          if (props.isEdit) {
-            callback()
-            return
-          }
-          callback(new Error('请输入身份证号'))
+          callback()
           return
         }
         // 验证身份证号格式：18 位，前 17 位数字，最后一位数字或 X
@@ -316,8 +311,8 @@ const handleSubmit = async () => {
       photo: formData.photo || undefined
     }
 
-    // 新增模式才提交身份证号
-    if (!props.isEdit) {
+    // 提交身份证号（如果有值）
+    if (formData.id_card) {
       submitData.id_card = formData.id_card
     }
 
@@ -326,8 +321,6 @@ const handleSubmit = async () => {
       submitData.id = formData.id
       submitData.status = formData.status
     }
-    
-    console.log('提交数据:', submitData)
     
     // 触发提交事件
     emit('submit', submitData)

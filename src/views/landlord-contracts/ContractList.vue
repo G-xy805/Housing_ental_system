@@ -1203,7 +1203,7 @@ const handlePageChange = (page) => {
 
 // 排序处理
 const handleSortChange = ({ prop, order }) => {
-  console.log('排序:', prop, order)
+  // 可以根据排序参数重新请求数据
 }
 
 // 初始化

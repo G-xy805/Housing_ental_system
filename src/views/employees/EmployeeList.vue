@@ -478,9 +478,11 @@ const formRules = computed(() => ({
         { min: 6, message: '密码长度不能少于 6 个字符', trigger: 'blur' }
       ],
   name: [],
-  id_card: [
-    { pattern: /^[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]$/, message: '请输入正确的18位身份证号', trigger: 'blur' }
-  ],
+  id_card: (isEdit.value && hasIdCard.value)
+    ? []
+    : [
+        { pattern: /^[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]$/, message: '请输入正确的18位身份证号', trigger: 'blur' }
+      ],
   phone: [
     { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }
   ],

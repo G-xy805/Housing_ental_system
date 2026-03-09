@@ -18,7 +18,7 @@
       </div>
     </div>
 
-    <el-row v-loading="loading" :gutter="20">
+    <el-row v-loading="loading" :gutter="20" style="width: 100%; overflow-x: visible;">
       <!-- 左侧：图片和基本信息 -->
       <el-col :xs="24" :md="16">
         <!-- 图片轮播 -->
@@ -113,17 +113,17 @@
               <el-icon><Location /></el-icon>
               {{ houseData.address }}
             </el-descriptions-item>
-            <el-descriptions-item label="租金价格">
+            <el-descriptions-item label="租金价格" v-if="houseData.rental_type !== 'shared'">
               <span class="price-text">¥{{ houseData.rent_price }}</span>
               <span class="price-unit">/月</span>
             </el-descriptions-item>
-            <el-descriptions-item label="押金方式">
-              {{ getDepositText(houseData.deposit_method) }}
+            <el-descriptions-item label="押金方式" v-if="houseData.rental_type !== 'shared'">
+              {{ getDepositText(houseData.payment_method) }}
             </el-descriptions-item>
             <el-descriptions-item label="建筑面积">
               {{ houseData.area }}㎡
             </el-descriptions-item>
-            <el-descriptions-item label="户型格局">
+            <el-descriptions-item label="户型格局" v-if="houseData.rental_type !== 'shared'">
               {{ houseData.room_count }}室{{ houseData.hall_count }}厅{{ houseData.bathroom_count }}卫
             </el-descriptions-item>
             <el-descriptions-item label="楼层信息">
@@ -144,8 +144,19 @@
         <!-- 配套设施 -->
         <el-card class="amenities-card" v-if="houseData.amenities && houseData.amenities.length > 0">
           <template #header>
-            <span class="card-title">配套设施</span>
+            <span class="card-title">
+              {{ houseData.rental_type === 'shared' ? '公共配套设施' : '配套设施' }}
+            </span>
           </template>
+          <div v-if="houseData.rental_type === 'shared'" class="amenities-tip">
+            <el-alert
+              title="以下为公共区域设施，所有租户共享使用"
+              type="info"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 12px"
+            />
+          </div>
           <div class="amenities-list">
             <div
               v-for="amenity in houseData.amenities"
@@ -156,22 +167,6 @@
               <span>{{ getAmenityText(amenity) }}</span>
             </div>
           </div>
-        </el-card>
-
-        <!-- 房间列表（合租模式） -->
-        <el-card class="rooms-card" v-if="houseData.rental_type === 'shared' && houseData.rooms && houseData.rooms.length > 0">
-          <template #header>
-            <span class="card-title">房间列表</span>
-          </template>
-          <RoomList
-            :model-value="houseData.rooms"
-            :show-add-button="false"
-            :show-edit-button="hasPermission('edit')"
-            :show-delete-button="hasPermission('delete')"
-            @edit="handleEditRoom"
-            @delete="handleDeleteRoom"
-            @view="handleViewRoom"
-          />
         </el-card>
       </el-col>
 
@@ -231,10 +226,41 @@
               <span class="stat-label">更新时间</span>
               <span class="stat-value">{{ formatDate(houseData.updated_at) }}</span>
             </div>
+            <div class="stat-item" v-if="houseData.rental_type === 'shared' && houseData.rooms && houseData.rooms.length > 0">
+              <span class="stat-label">出租进度</span>
+              <span class="stat-value">
+                {{ houseData.rooms.filter(room => room.status === 'rented').length }}/{{ houseData.rooms.length }}间已租
+              </span>
+            </div>
           </div>
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- 房间列表（合租模式）- 独占一行 -->
+    <el-card class="rooms-card" v-if="houseData.rental_type === 'shared'" style="margin-top: 20px;">
+      <template #header>
+        <div class="rooms-card-header">
+          <span class="card-title">房间列表</span>
+        </div>
+      </template>
+      
+      <!-- 空状态提示 -->
+      <el-empty v-if="!houseData.rooms || houseData.rooms.length === 0" description="暂无房间" />
+      
+      <!-- 房间列表（只读模式，简化显示） -->
+      <RoomList
+        v-else
+        :model-value="houseData.rooms"
+        :house-id="houseId"
+        :show-add-button="false"
+        :show-edit-button="false"
+        :show-delete-button="false"
+        :show-create-contract-button="false"
+        :show-view-button="true"
+        :simple-mode="true"
+      />
+    </el-card>
 
     <!-- 编辑对话框 -->
     <el-dialog
@@ -270,7 +296,8 @@ import {
   User,
   Phone,
   ChatDotRound,
-  Picture
+  Picture,
+  Plus
 } from '@element-plus/icons-vue'
 import { getHouseDetail as getHouseDetailApi, deleteHouse } from '@/api/house'
 import { useHouseStore } from '@/store/house'
@@ -282,6 +309,9 @@ const router = useRouter()
 const route = useRoute()
 const houseStore = useHouseStore()
 const userStore = useUserStore()
+
+// 房源 ID
+const houseId = computed(() => route.params.id)
 
 const loading = ref(false)
 const dialogVisible = ref(false)
@@ -303,7 +333,8 @@ const houseData = ref({
   district: '',
   address: '',
   rent_price: 0,
-  deposit_method: 'press1_pay3',
+  deposit: 0,
+  payment_method: 'press1_pay3',
   area: 0,
   room_count: 0,
   hall_count: 0,
@@ -592,22 +623,36 @@ const handleDelete = () => {
   }).catch(() => {})
 }
 
+// 添加房间
+const handleAddRoom = () => {
+  // 这里可以通过事件总线或者直接操作 RoomList 组件来触发添加
+  // 简单做法是直接刷新页面
+  loadHouseDetail()
+}
+
+// 房间添加成功后的处理
+const handleRoomAdded = async () => {
+  await loadHouseDetail()
+}
+
 // 编辑房间
 const handleEditRoom = (room) => {
-  console.log('编辑房间:', room)
   ElMessage.info('房间编辑功能待实现')
 }
 
 // 删除房间
 const handleDeleteRoom = (room) => {
-  console.log('删除房间:', room)
   ElMessage.info('房间删除功能待实现')
 }
 
 // 查看房间
 const handleViewRoom = (room) => {
-  console.log('查看房间:', room)
   ElMessage.info('房间详情功能待实现')
+}
+
+// 创建合同
+const handleCreateContract = (room) => {
+  ElMessage.info('创建合同功能待实现')
 }
 
 // 提交成功回调
@@ -734,12 +779,27 @@ onMounted(() => {
   .map-card,
   .stats-card {
     margin-bottom: 20px;
+    width: 100%;
+    overflow-x: visible;
 
     .card-title {
       font-size: 16px;
       font-weight: bold;
       color: #333;
     }
+  }
+
+  .rooms-card {
+    :deep(.el-card__body) {
+      overflow-x: visible;
+      padding: 20px;
+    }
+  }
+
+  .rooms-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
 
   .card-header {

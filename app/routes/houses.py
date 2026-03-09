@@ -24,6 +24,12 @@ from app.utils.query_optimizer import (
     optimize_house_query,
     optimize_house_detail_query
 )
+from app.utils.json_validator import (
+    validate_facilities,
+    validate_facilities_detailed,
+    sanitize_facilities,
+    ValidationResult
+)
 
 # 创建蓝图
 houses_bp = Blueprint('houses', __name__, url_prefix='/api/houses')
@@ -133,31 +139,54 @@ def validate_house_data(data: Dict, is_update: bool = False) -> tuple:
         except (ValueError, TypeError):
             errors.append('总楼层必须是有效的整数')
     
-    # 租金信息
+    # 朝向
+    if 'orientation' in data:
+        validated_data['orientation'] = data.get('orientation', '').strip()
+    
+    # 装修情况
+    if 'decoration' in data:
+        validated_data['decoration'] = data.get('decoration', '').strip()
+    
+    # 租金信息（仅整租需要）
+    rental_type = data.get('rental_type', 'whole')
     if not is_update or 'rent_price' in data:
         try:
             rent_price = float(data['rent_price']) if data.get('rent_price') else None
-            if not is_update and (not rent_price or rent_price <= 0):
-                errors.append('租金不能为空且必须大于 0')
-            elif is_update and rent_price is not None and rent_price <= 0:
-                errors.append('租金必须大于 0')
+            # 整租类型必须设置租金，合租类型租金可选（因为房间级别会设置）
+            if rental_type == 'whole':
+                if not is_update and (not rent_price or rent_price <= 0):
+                    errors.append('租金不能为空且必须大于 0')
+                elif is_update and rent_price is not None and rent_price <= 0:
+                    errors.append('租金必须大于 0')
             validated_data['rent_price'] = rent_price
         except (ValueError, TypeError):
             errors.append('租金必须是有效的数字')
     
-    if 'deposit' in data:
-        try:
-            validated_data['deposit'] = float(data['deposit']) if data['deposit'] else None
-        except (ValueError, TypeError):
-            errors.append('押金必须是有效的数字')
+    # 押金和付款方式（仅整租需要）
+    if rental_type == 'whole':
+        if 'deposit' in data:
+            try:
+                validated_data['deposit'] = float(data['deposit']) if data['deposit'] else None
+            except (ValueError, TypeError):
+                errors.append('押金必须是有效的数字')
+        
+        if 'payment_method' in data:
+            validated_data['payment_method'] = data.get('payment_method', '').strip()
+    else:
+        # 合租类型允许为空
+        if 'deposit' in data:
+            try:
+                validated_data['deposit'] = float(data['deposit']) if data.get('deposit') else None
+            except (ValueError, TypeError):
+                errors.append('押金必须是有效的数字')
+        
+        if 'payment_method' in data:
+            validated_data['payment_method'] = data.get('payment_method', '').strip()
     
-    if 'payment_method' in data:
-        validated_data['payment_method'] = data.get('payment_method', '').strip()
-    
-    # 租赁类型（只支持整租）
+    # 租赁类型（支持整租和合租）
     if 'rental_type' in data:
-        if data['rental_type'] != 'whole':
-            errors.append('租赁类型只能是 whole(整租)')
+        if data['rental_type'] not in ['whole', 'shared']:
+            errors.append('租赁类型只能是 whole(整租) 或 shared(合租)')
         else:
             validated_data['rental_type'] = data['rental_type']
     else:
@@ -171,18 +200,37 @@ def validate_house_data(data: Dict, is_update: bool = False) -> tuple:
         else:
             validated_data['status'] = data['status']
     
-    # 配套设施
+    # 配套设施（使用 JSON 字段验证器）
     if 'facilities' in data:
-        if isinstance(data['facilities'], dict):
-            validated_data['facilities'] = data['facilities']
-        elif isinstance(data['facilities'], str):
+        facilities_data = None
+        
+        # 解析 JSON 字符串
+        if isinstance(data['facilities'], str):
             import json
             try:
-                validated_data['facilities'] = json.loads(data['facilities'])
+                facilities_data = json.loads(data['facilities'])
             except json.JSONDecodeError:
                 errors.append('配套设施必须是有效的 JSON 格式')
-        else:
+        elif isinstance(data['facilities'], dict):
+            facilities_data = data['facilities']
+        elif data['facilities'] is not None:
             errors.append('配套设施必须是对象或 JSON 字符串')
+        
+        # 验证设施数据
+        if facilities_data is not None:
+            is_valid, facility_errors, validated_facilities = validate_facilities(
+                facilities_data, 
+                strict=False  # 非严格模式，保留未知字段
+            )
+            
+            if not is_valid:
+                errors.extend(facility_errors)
+            else:
+                # 使用验证后的数据（包含默认值填充）
+                validated_data['facilities'] = validated_facilities
+    elif not is_update:
+        # 创建时如果没有提供 facilities，使用默认值
+        validated_data['facilities'] = {}
     
     # 封面图片
     if 'cover_image' in data:
@@ -255,9 +303,9 @@ def format_house_response(house: House, include_rooms: bool = False, is_internal
     """
     data = house.to_dict(include_landlord=is_internal, is_internal=is_internal)
     
-    # 系统只支持整租，不再返回房间信息
-    # if include_rooms and house.rental_type == 'shared':
-    #     data['rooms'] = [room.to_dict() for room in house.rooms.order_by(Room.room_number).all()]
+    # 合租类型返回房间信息
+    if include_rooms and house.rental_type == 'shared':
+        data['rooms'] = [room.to_dict() for room in house.rooms.order_by(Room.room_number).all()]
     
     # 添加媒体文件信息
     media_list = Media.query.filter_by(house_id=house.id).order_by(Media.sort_order, Media.created_at).all()
@@ -543,7 +591,10 @@ def create_house():
         house.owner_id = g.user_id
         
         db.session.add(house)
-        db.session.flush()  # 获取房源 ID
+        db.session.flush()  # 获取房源 ID，并绑定到 session
+        
+        # 计算初始状态（需要在 add 和 flush 之后，因为 update_status 会访问关系属性）
+        house.update_status()
         
         # 处理封面图片和图片集逻辑
         current_app.logger.info(f"处理图片逻辑：cover_image={validated_data.get('cover_image')}, images={data.get('images', [])}")
@@ -916,8 +967,8 @@ def create_room(house_id: int):
                 validated_data['room_number'] = room_number
         
         # 房间名称
-        if 'name' in data:
-            validated_data['name'] = data['name'].strip()
+        if 'room_name' in data:
+            validated_data['room_name'] = data['room_name'].strip()
         
         # 描述
         if 'description' in data:
@@ -943,8 +994,8 @@ def create_room(house_id: int):
                 validated_data['floor'] = ''
         
         # 朝向
-        if 'direction' in data:
-            validated_data['direction'] = data.get('direction', '').strip()
+        if 'orientation' in data:
+            validated_data['orientation'] = data.get('orientation', '').strip()
         
         # 租金（必填）
         if not data.get('rent_price'):
@@ -965,18 +1016,45 @@ def create_room(house_id: int):
             except (ValueError, TypeError):
                 errors.append('押金必须是有效的数字')
         
-        # 配套设施
-        if 'facilities' in data:
+        # 付款方式
+        if 'payment_method' in data:
+            validated_data['payment_method'] = data.get('payment_method', 'press1_pay3').strip()
+        
+        # 是否主卧
+        if 'is_master' in data:
+            validated_data['is_master'] = bool(data['is_master'])
+        
+        # 配套设施（使用 JSON 字段验证器）
+        if 'facilities' in data and data['facilities'] is not None:
+            facilities_data = None
+            
+            # 解析 JSON 字符串
             if isinstance(data['facilities'], dict):
-                validated_data['facilities'] = data['facilities']
-            elif isinstance(data['facilities'], str):
+                facilities_data = data['facilities']
+            elif isinstance(data['facilities'], str) and data['facilities'].strip():
                 import json
                 try:
-                    validated_data['facilities'] = json.loads(data['facilities'])
+                    facilities_data = json.loads(data['facilities'])
                 except json.JSONDecodeError:
                     errors.append('配套设施必须是有效的 JSON 格式')
+            
+            # 验证设施数据
+            if facilities_data is not None:
+                is_valid, facility_errors, validated_facilities = validate_facilities(
+                    facilities_data,
+                    strict=False
+                )
+                
+                if not is_valid:
+                    errors.extend(facility_errors)
+                else:
+                    validated_data['facilities'] = validated_facilities
             else:
-                errors.append('配套设施必须是对象或 JSON 字符串')
+                # 默认为空对象
+                validated_data['facilities'] = {}
+        else:
+            # 默认为空对象
+            validated_data['facilities'] = {}
         
         if errors:
             return APIResponse.validation_error('; '.join(errors))
@@ -986,14 +1064,15 @@ def create_room(house_id: int):
         room.house_id = house_id
         
         db.session.add(room)
+        
+        # 自动更新房源状态（在同一个事务中）
+        house.update_status()
+        
+        # 统一提交所有更改
         db.session.commit()
         
         # 刷新获取完整数据
         db.session.refresh(room)
-        
-        # 自动更新房源状态
-        house.update_status()
-        db.session.commit()
         
         current_app.logger.info(f"用户 {g.username} 为房源 {house_id} 创建了房间 {room.id}")
         
@@ -1050,8 +1129,8 @@ def update_room(room_id: int):
         errors = []
         
         # 房间名称
-        if 'name' in data:
-            room.name = data['name'].strip()
+        if 'room_name' in data:
+            room.room_name = data['room_name'].strip()
         
         # 描述
         if 'description' in data:
@@ -1074,8 +1153,8 @@ def update_room(room_id: int):
                 room.floor = ''
         
         # 朝向
-        if 'direction' in data:
-            room.direction = data.get('direction', '').strip()
+        if 'orientation' in data:
+            room.orientation = data.get('orientation', '').strip()
         
         # 租金
         if 'rent_price' in data:
@@ -1094,6 +1173,14 @@ def update_room(room_id: int):
             except (ValueError, TypeError):
                 errors.append('押金必须是有效的数字')
         
+        # 付款方式
+        if 'payment_method' in data:
+            room.payment_method = data.get('payment_method', 'press1_pay3').strip()
+        
+        # 是否主卧
+        if 'is_master' in data:
+            room.is_master = bool(data['is_master'])
+        
         # 状态
         if 'status' in data:
             if data['status'] not in ['available', 'rented', 'maintenance']:
@@ -1101,26 +1188,39 @@ def update_room(room_id: int):
             else:
                 room.status = data['status']
         
-        # 配套设施
-        if 'facilities' in data:
+        # 配套设施（使用 JSON 字段验证器）
+        if 'facilities' in data and data['facilities'] is not None:
+            facilities_data = None
+            
+            # 解析 JSON 字符串
             if isinstance(data['facilities'], dict):
-                room.facilities = data['facilities']
-            elif isinstance(data['facilities'], str):
+                facilities_data = data['facilities']
+            elif isinstance(data['facilities'], str) and data['facilities'].strip():
                 import json
                 try:
-                    room.facilities = json.loads(data['facilities'])
+                    facilities_data = json.loads(data['facilities'])
                 except json.JSONDecodeError:
                     errors.append('配套设施必须是有效的 JSON 格式')
-            else:
-                errors.append('配套设施必须是对象或 JSON 字符串')
+            
+            # 验证设施数据
+            if facilities_data is not None:
+                is_valid, facility_errors, validated_facilities = validate_facilities(
+                    facilities_data,
+                    strict=False
+                )
+                
+                if not is_valid:
+                    errors.extend(facility_errors)
+                else:
+                    room.facilities = validated_facilities
         
         if errors:
             return APIResponse.validation_error('; '.join(errors))
         
-        db.session.commit()
-        
-        # 自动更新房源状态
+        # 自动更新房源状态（在同一个事务中）
         house.update_status()
+        
+        # 统一提交所有更改
         db.session.commit()
         
         current_app.logger.info(f"用户 {g.username} 更新了房间 {room_id}")
@@ -1185,6 +1285,327 @@ def delete_room(room_id: int):
         db.session.rollback()
         current_app.logger.error(f"删除房间失败：{str(e)}")
         return APIResponse.server_error("删除房间失败")
+
+
+@houses_bp.route('/<int:house_id>/rooms/batch', methods=['POST'])
+@login_required
+@permission_required('create')
+def batch_create_rooms(house_id: int):
+    """
+    批量创建房间
+    
+    Path Parameters:
+        house_id: 房源 ID
+        
+    Request Body:
+        {
+            "rooms": [
+                {
+                    "room_number": "101",
+                    "name": "主卧",
+                    "description": "朝南主卧，带阳台",
+                    "area": 20.5,
+                    "floor": "1 层",
+                    "direction": "南",
+                    "rent_price": 2500,
+                    "deposit": 5000,
+                    "facilities": {"bed": true, "ac": true, "desk": true}
+                },
+                {
+                    "room_number": "102",
+                    "name": "次卧",
+                    "description": "朝北次卧",
+                    "area": 15.5,
+                    "floor": "1 层",
+                    "direction": "北",
+                    "rent_price": 2000,
+                    "deposit": 4000,
+                    "facilities": {"bed": true, "desk": true}
+                }
+            ]
+        }
+        
+    Response:
+        {
+            "success": true,
+            "message": "批量创建房间成功",
+            "data": {
+                "created_count": 2,
+                "rooms": [...]
+            }
+        }
+    """
+    try:
+        house = House.query.get(house_id)
+        
+        if not house:
+            return APIResponse.not_found("房源不存在")
+        
+        # 检查权限
+        if house.owner_id != g.user_id and g.user_role != 'admin':
+            return APIResponse.forbidden("您没有权限为此房源创建房间")
+        
+        # 检查是否为合租房源
+        if house.rental_type != 'shared':
+            return APIResponse.bad_request("只有合租房源才能创建房间")
+        
+        # 获取请求数据
+        data = request.get_json()
+        
+        if not data or not isinstance(data.get('rooms'), list):
+            return APIResponse.bad_request("请求数据必须包含 rooms 数组")
+        
+        rooms_data = data['rooms']
+        if not rooms_data:
+            return APIResponse.bad_request("rooms 数组不能为空")
+        
+        # 验证并创建房间
+        created_rooms = []
+        errors = []
+        
+        # 首先检查所有房间编号是否重复
+        existing_room_numbers = set(
+            room.room_number for room in Room.query.filter_by(house_id=house_id).all()
+        )
+        
+        # 检查批量创建的房间编号是否内部重复
+        batch_room_numbers = set()
+        for i, room_data in enumerate(rooms_data):
+            room_number = str(room_data.get('room_number', '')).strip()
+            if not room_number:
+                errors.append(f"第 {i+1} 个房间：房间编号不能为空")
+            elif room_number in existing_room_numbers:
+                errors.append(f"第 {i+1} 个房间：房间编号 {room_number} 已存在")
+            elif room_number in batch_room_numbers:
+                errors.append(f"第 {i+1} 个房间：房间编号 {room_number} 在批量创建中重复")
+            else:
+                batch_room_numbers.add(room_number)
+        
+        if errors:
+            return APIResponse.validation_error('; '.join(errors))
+        
+        # 批量创建房间
+        for room_data in rooms_data:
+            validated_data = {}
+            
+            # 房间编号
+            validated_data['room_number'] = str(room_data['room_number']).strip()
+            
+            # 房间名称（API 使用 name，模型使用 room_name）
+            if 'name' in room_data:
+                validated_data['room_name'] = room_data.get('name', '').strip()
+            
+            # 描述
+            if 'description' in room_data:
+                validated_data['description'] = room_data.get('description', '').strip()
+            
+            # 面积
+            if 'area' in room_data:
+                try:
+                    area = float(room_data['area']) if room_data['area'] else None
+                    if area and area <= 0:
+                        errors.append('面积必须大于 0')
+                    validated_data['area'] = area
+                except (ValueError, TypeError):
+                    errors.append('面积必须是有效的数字')
+            
+            # 楼层
+            if 'floor' in room_data:
+                floor_value = room_data.get('floor')
+                if floor_value is not None:
+                    validated_data['floor'] = str(floor_value).strip() if floor_value else ''
+                else:
+                    validated_data['floor'] = ''
+            
+            # 朝向（API 使用 direction，模型使用 orientation）
+            if 'direction' in room_data:
+                validated_data['orientation'] = room_data.get('direction', '').strip()
+            
+            # 租金（必填）
+            if not room_data.get('rent_price'):
+                errors.append('房间租金不能为空')
+            else:
+                try:
+                    rent_price = float(room_data['rent_price'])
+                    if rent_price <= 0:
+                        errors.append('租金必须大于 0')
+                    validated_data['rent_price'] = rent_price
+                except (ValueError, TypeError):
+                    errors.append('租金必须是有效的数字')
+            
+            # 押金
+            if 'deposit' in room_data:
+                try:
+                    validated_data['deposit'] = float(room_data['deposit']) if room_data['deposit'] else 0
+                except (ValueError, TypeError):
+                    errors.append('押金必须是有效的数字')
+            
+            # 配套设施（使用 JSON 字段验证器）
+            if 'facilities' in room_data:
+                facilities_data = None
+                
+                # 解析 JSON 字符串
+                if isinstance(room_data['facilities'], dict):
+                    facilities_data = room_data['facilities']
+                elif isinstance(room_data['facilities'], str):
+                    import json
+                    try:
+                        facilities_data = json.loads(room_data['facilities'])
+                    except json.JSONDecodeError:
+                        errors.append('配套设施必须是有效的 JSON 格式')
+                else:
+                    errors.append('配套设施必须是对象或 JSON 字符串')
+                
+                # 验证设施数据
+                if facilities_data is not None:
+                    is_valid, facility_errors, validated_facilities = validate_facilities(
+                        facilities_data,
+                        strict=False
+                    )
+                    
+                    if not is_valid:
+                        errors.extend(facility_errors)
+                    else:
+                        validated_data['facilities'] = validated_facilities
+            
+            if errors:
+                break
+            
+            # 创建房间
+            room = Room(**validated_data)
+            room.house_id = house_id
+            db.session.add(room)
+            created_rooms.append(room)
+        
+        if errors:
+            db.session.rollback()
+            return APIResponse.validation_error('; '.join(errors))
+        
+        # 自动更新房源状态（在同一个事务中）
+        house.update_status()
+        
+        # 统一提交所有更改
+        db.session.commit()
+        
+        # 刷新获取完整数据
+        for room in created_rooms:
+            db.session.refresh(room)
+        
+        current_app.logger.info(f"用户 {g.username} 为房源 {house_id} 批量创建了 {len(created_rooms)} 个房间")
+        
+        return APIResponse.success({
+            'created_count': len(created_rooms),
+            'rooms': [room.to_dict() for room in created_rooms]
+        }, "批量创建房间成功", 201)
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"批量创建房间失败：{str(e)}")
+        return APIResponse.server_error("批量创建房间失败")
+
+
+@houses_bp.route('/<int:house_id>/rooms/available', methods=['GET'])
+@login_required
+def get_available_rooms(house_id: int):
+    """
+    获取可租房间列表
+    
+    Path Parameters:
+        house_id: 房源 ID
+        
+    Response:
+        {
+            "success": true,
+            "data": {
+                "house_id": 1,
+                "house_title": "温馨两居室",
+                "available_rooms": [...]
+            }
+        }
+    """
+    try:
+        house = House.query.get(house_id)
+        
+        if not house:
+            return APIResponse.not_found("房源不存在")
+        
+        # 检查是否为合租房源
+        if house.rental_type != 'shared':
+            return APIResponse.bad_request("该房源不是合租房源")
+        
+        # 获取所有可租房间
+        available_rooms = Room.query.filter_by(
+            house_id=house_id,
+            status='available'
+        ).order_by(Room.room_number).all()
+        
+        # 格式化响应
+        room_list = [room.to_dict() for room in available_rooms]
+        
+        return APIResponse.success({
+            'house_id': house_id,
+            'house_title': house.title,
+            'available_rooms': room_list
+        }, "获取可租房间列表成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取可租房间列表失败：{str(e)}")
+        return APIResponse.server_error("获取可租房间列表失败")
+
+
+@houses_bp.route('/<int:house_id>/stats', methods=['GET'])
+@login_required
+def get_house_stats(house_id: int):
+    """
+    获取合租房源统计信息
+    
+    Path Parameters:
+        house_id: 房源 ID
+        
+    Response:
+        {
+            "success": true,
+            "data": {
+                "house_id": 1,
+                "house_title": "温馨两居室",
+                "total_rooms": 3,
+                "rented_rooms": 1,
+                "available_rooms": 2,
+                "maintenance_rooms": 0
+            }
+        }
+    """
+    try:
+        house = House.query.get(house_id)
+        
+        if not house:
+            return APIResponse.not_found("房源不存在")
+        
+        # 检查是否为合租房源
+        if house.rental_type != 'shared':
+            return APIResponse.bad_request("该房源不是合租房源")
+        
+        # 统计房间状态
+        total_rooms = house.rooms.count()
+        rented_rooms = house.rooms.filter(Room.status == 'rented').count()
+        available_rooms = house.rooms.filter(Room.status == 'available').count()
+        maintenance_rooms = house.rooms.filter(Room.status == 'maintenance').count()
+        
+        # 格式化响应
+        stats_data = {
+            'house_id': house_id,
+            'house_title': house.title,
+            'total_rooms': total_rooms,
+            'rented_rooms': rented_rooms,
+            'available_rooms': available_rooms,
+            'maintenance_rooms': maintenance_rooms
+        }
+        
+        return APIResponse.success(stats_data, "获取房源统计信息成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取房源统计信息失败：{str(e)}")
+        return APIResponse.server_error("获取房源统计信息失败")
 
 
 # ============================================================================
@@ -1343,7 +1764,7 @@ def recalculate_house_status(house_id: int):
 
 @houses_bp.route('/stats', methods=['GET'])
 @login_required
-def get_house_stats():
+def get_houses_stats():
     """
     获取房源统计信息
     
@@ -1408,3 +1829,105 @@ def get_house_stats():
     except Exception as e:
         current_app.logger.error(f"获取房源统计失败：{str(e)}")
         return APIResponse.server_error("获取房源统计失败")
+
+
+# ============================================================================
+# 设施配置接口
+# ============================================================================
+
+@houses_bp.route('/facilities/config', methods=['GET'])
+@login_required
+def get_facilities_config():
+    """
+    获取设施配置信息
+    
+    返回所有支持的设施字段及其描述，供前端使用
+    
+    Response:
+        {
+            "success": true,
+            "data": {
+                "facilities": {
+                    "wifi": {"type": "bool", "description": "无线网络", "default": false},
+                    "ac": {"type": "bool", "description": "空调", "default": false},
+                    ...
+                },
+                "default_facilities": {...}
+            }
+        }
+    """
+    try:
+        from app.utils.json_validator import get_all_facilities, get_default_facilities
+        
+        facilities = get_all_facilities()
+        default_facilities = get_default_facilities()
+        
+        # 格式化设施数据
+        formatted_facilities = {}
+        for key, config in facilities.items():
+            formatted_facilities[key] = {
+                'type': config['type'].__name__,
+                'description': config['description'],
+                'default': config['default']
+            }
+        
+        return APIResponse.success({
+            'facilities': formatted_facilities,
+            'default_facilities': default_facilities
+        }, "获取设施配置成功")
+        
+    except Exception as e:
+        current_app.logger.error(f"获取设施配置失败：{str(e)}")
+        return APIResponse.server_error("获取设施配置失败")
+
+
+@houses_bp.route('/facilities/validate', methods=['POST'])
+@login_required
+def validate_facilities_endpoint():
+    """
+    验证设施数据
+    
+    用于前端实时验证设施数据
+    
+    Request Body:
+        {
+            "facilities": {"wifi": true, "ac": true, ...},
+            "strict": false  // 可选，是否严格模式
+        }
+        
+    Response:
+        {
+            "success": true,
+            "data": {
+                "is_valid": true,
+                "errors": [],
+                "warnings": ["未知字段 'custom_field'"],
+                "validated_data": {...}
+            }
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return APIResponse.bad_request("请求数据不能为空")
+        
+        facilities = data.get('facilities')
+        strict = data.get('strict', False)
+        
+        if facilities is None:
+            return APIResponse.bad_request("facilities 字段不能为空")
+        
+        # 使用详细验证
+        result = validate_facilities_detailed(facilities, strict=strict)
+        
+        return APIResponse.success({
+            'is_valid': result.is_valid,
+            'errors': result.errors,
+            'warnings': result.warnings,
+            'validated_data': result.data
+        }, "验证完成")
+        
+    except Exception as e:
+        current_app.logger.error(f"验证设施数据失败：{str(e)}")
+        return APIResponse.server_error("验证设施数据失败")

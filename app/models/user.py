@@ -208,6 +208,47 @@ class User(BaseModel):
         
         return data
     
+    def get_cascade_relations(self):
+        """
+        获取需要级联处理的关系定义
+        
+        用户删除规则：
+        - 如果有负责的房源，不允许删除
+        - 如果有操作的支付记录，不允许删除
+        - 如果有创建的员工，不允许删除
+        - 上传的媒体文件可以级联软删除
+        """
+        from .house import House
+        from .media import Media
+        from .payment import Payment
+        
+        return {
+            'houses': {
+                'model': House,
+                'cascade_delete': False,
+                'validate_not_empty': True,
+                'error_message': '该员工负责的房源不为空，无法删除'
+            },
+            'operated_payments': {
+                'model': Payment,
+                'cascade_delete': False,
+                'validate_not_empty': True,
+                'error_message': '该员工有操作过的支付记录，无法删除'
+            },
+            'created_employees': {
+                'model': User,
+                'cascade_delete': False,
+                'validate_not_empty': True,
+                'error_message': '该员工创建了其他员工账号，无法删除'
+            },
+            'uploaded_media': {
+                'model': Media,
+                'cascade_delete': True,
+                'validate_not_empty': False,
+                'error_message': '该员工上传的媒体文件'
+            }
+        }
+    
     def __repr__(self):
         return f'<User {self.username}>'
 

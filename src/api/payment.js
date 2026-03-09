@@ -90,3 +90,14 @@ export function getPaymentStats(params) {
 export function updateLateFees() {
   return request.post('/payments/update-late-fees')
 }
+
+/**
+ * 批量更新支付状态
+ * @param {Object} data 批量更新数据
+ * @param {Array} data.ids 支付记录ID列表
+ * @param {string} data.status 新状态
+ * @returns {Promise}
+ */
+export function batchUpdateStatus(data) {
+  return request.post('/payments/batch-update-status', data)
+}

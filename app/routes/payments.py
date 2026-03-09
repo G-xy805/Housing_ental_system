@@ -16,6 +16,7 @@ from app.utils.query_optimizer import (
     optimize_payment_query,
     optimize_payment_detail_query
 )
+from app.utils.transaction import transactional, DatabaseException
 
 # 创建蓝图
 payments_bp = Blueprint('payments', __name__, url_prefix='/api/payments')
@@ -164,9 +165,11 @@ def format_payment_response(payment: Payment) -> Dict:
     
     # 计算滞纳金
     late_fee, overdue_days = payment.calculate_late_fee()
-    data['current_late_fee'] = late_fee
+    data['current_late_fee'] = float(late_fee) if isinstance(late_fee, Decimal) else late_fee
     data['current_overdue_days'] = overdue_days
-    data['total_amount_with_late_fee'] = payment.amount + late_fee
+    # 确保 amount 和 late_fee 类型一致
+    amount = float(payment.amount) if isinstance(payment.amount, (int, float, Decimal)) else 0.0
+    data['total_amount_with_late_fee'] = amount + float(late_fee) if isinstance(late_fee, Decimal) else amount + late_fee
     
     return data
 
@@ -539,12 +542,134 @@ def delete_payment(payment_id: int):
 # 支付操作接口
 # ============================================================================
 
+@transactional()
+def _do_verify_payment(
+    payment_id: int,
+    paid_amount: float,
+    payment_method: Optional[str],
+    payment_date: date,
+    remark: Optional[str],
+    user_id: int,
+    username: str,
+    user_role: str
+) -> dict:
+    """
+    执行支付确认的核心业务逻辑（事务保护）
+    
+    确保以下操作的原子性：
+    1. 支付状态更新
+    2. 滞纳金计算
+    3. 租客信用记录更新
+    4. 押金状态更新（如果是押金支付）
+    
+    Args:
+        payment_id: 支付记录 ID
+        paid_amount: 实付金额
+        payment_method: 支付方式
+        payment_date: 实际支付日期
+        remark: 备注
+        user_id: 当前用户 ID
+        username: 当前用户名
+        user_role: 当前用户角色
+        
+    Returns:
+        dict: 包含支付确认结果
+        
+    Raises:
+        ValueError: 业务逻辑错误
+        PermissionError: 权限错误
+        DatabaseException: 数据库错误
+    """
+    payment = Payment.query.get(payment_id)
+    
+    if not payment:
+        raise ValueError("支付记录不存在")
+    
+    # 检查权限（管理员或房源负责人）
+    contract = Contract.query.get(payment.contract_id)
+    if contract and contract.house and user_role != 'admin':
+        # 检查当前员工是否为房源负责人
+        if contract.house.owner_id != user_id:
+            raise PermissionError("您没有权限操作此支付记录")
+    
+    # 计算滞纳金
+    late_fee, overdue_days = payment.calculate_late_fee(payment_date)
+    
+    # 标记为已支付
+    payment.mark_as_paid(
+        paid_amount=paid_amount,
+        payment_date=payment_date,
+        payment_method=payment_method
+    )
+    
+    # 添加备注
+    if remark:
+        payment.remark = (payment.remark or '') + f"\n{remark}"
+    
+    payment.operator_id = user_id
+    
+    # 如果是押金支付，更新合同押金状态
+    if payment.payment_type == 'deposit' and payment.status == 'paid':
+        if contract:
+            try:
+                # 检查押金是否全额支付
+                total_deposit_paid = sum(
+                    p.paid_amount for p in contract.payments 
+                    if p.payment_type == 'deposit' and p.status == 'paid'
+                )
+                
+                # 如果押金全额支付，更新合同押金状态
+                if total_deposit_paid >= contract.deposit_amount:
+                    contract.update_deposit_status('paid')
+                    current_app.logger.info(
+                        f"合同 {contract.contract_no} 押金已全额支付，"
+                        f"金额: {total_deposit_paid}元"
+                    )
+            except ValueError as e:
+                current_app.logger.warning(f"押金状态更新失败: {str(e)}")
+    
+    # 更新租客信用记录
+    if payment.contract_id and payment.contract_rel and payment.contract_rel.tenant_id:
+        from app.models.tenant import Tenant
+        from app.utils.credit_score import CreditEventType, CreditScoreConfig
+        
+        tenant = Tenant.query.get(payment.contract_rel.tenant_id)
+        if tenant and payment_date <= payment.due_date:
+            config = CreditScoreConfig.get_event_config(CreditEventType.ON_TIME_PAYMENT)
+            tenant.add_credit_record(
+                event_type='on_time_payment',
+                score_change=config['score_change'],
+                description=f"{config['description']}（支付记录ID: {payment.id}）",
+                related_id=payment.id
+            )
+            db.session.add(tenant)
+    
+    # 注意：事务装饰器会自动提交，不需要手动 commit
+    
+    current_app.logger.info(f"用户 {username} 确认了收款 {payment.payment_no}，金额：{paid_amount}")
+    
+    return {
+        'payment_id': payment.id,
+        'payment_no': payment.payment_no,
+        'status': payment.status,
+        'paid_amount': payment.paid_amount,
+        'late_fee': payment.late_fee,
+        'total_amount': float(payment.get_total_amount()),
+        'deposit_status_updated': payment.payment_type == 'deposit' and payment.status == 'paid'
+    }
+
+
 @payments_bp.route('/<int:payment_id>/verify', methods=['POST'])
 @login_required
 @permission_required('edit')
 def verify_payment(payment_id: int):
     """
     确认收款
+    
+    使用 @transactional 装饰器确保以下操作的原子性：
+    1. 支付状态更新
+    2. 滞纳金计算
+    3. 租客信用记录更新
     
     Path Parameters:
         payment_id: 支付记录 ID
@@ -571,18 +696,6 @@ def verify_payment(payment_id: int):
         }
     """
     try:
-        payment = Payment.query.get(payment_id)
-        
-        if not payment:
-            return APIResponse.not_found("支付记录不存在")
-        
-        # 检查权限（管理员或房源负责人）
-        contract = Contract.query.get(payment.contract_id)
-        if contract and contract.house and g.user_role != 'admin':
-            # 通过房源获取房东信息
-            if contract.house.landlord_id != g.user_id and contract.house.owner_id != g.user_id:
-                return APIResponse.forbidden("您没有权限操作此支付记录")
-        
         # 获取请求数据
         data = request.get_json()
         
@@ -616,37 +729,30 @@ def verify_payment(payment_id: int):
         else:
             payment_date = date.today()
         
-        # 计算滞纳金
-        late_fee, overdue_days = payment.calculate_late_fee(payment_date)
-        
-        # 标记为已支付
-        payment.mark_as_paid(
+        # 调用事务保护的核心业务函数
+        result = _do_verify_payment(
+            payment_id=payment_id,
             paid_amount=paid_amount,
+            payment_method=payment_method,
             payment_date=payment_date,
-            payment_method=payment_method
+            remark=data.get('remark'),
+            user_id=g.user_id,
+            username=g.username,
+            user_role=g.user_role
         )
         
-        # 添加备注
-        if data.get('remark'):
-            payment.remark = (payment.remark or '') + f"\n{data['remark']}"
+        return APIResponse.success(result, "收款确认成功")
         
-        payment.operator_id = g.user_id
-        
-        db.session.commit()
-        
-        current_app.logger.info(f"用户 {g.username} 确认了收款 {payment.payment_no}，金额：{paid_amount}")
-        
-        return APIResponse.success({
-            'payment_id': payment.id,
-            'payment_no': payment.payment_no,
-            'status': payment.status,
-            'paid_amount': payment.paid_amount,
-            'late_fee': payment.late_fee,
-            'total_amount': payment.get_total_amount()
-        }, "收款确认成功")
-        
+    except ValueError as e:
+        if "支付记录不存在" in str(e):
+            return APIResponse.not_found(str(e))
+        return APIResponse.bad_request(str(e))
+    except PermissionError as e:
+        return APIResponse.forbidden(str(e))
+    except DatabaseException as e:
+        current_app.logger.error(f"确认收款数据库错误：{str(e)}")
+        return APIResponse.server_error("确认收款失败，数据库操作错误")
     except Exception as e:
-        db.session.rollback()
         current_app.logger.error(f"确认收款失败：{str(e)}")
         return APIResponse.server_error("确认收款失败")
 
@@ -977,7 +1083,7 @@ def update_late_fees():
         ).all()
         
         updated_count = 0
-        total_late_fee = 0
+        total_late_fee = Decimal('0.00')
         
         for payment in overdue_payments:
             old_late_fee = payment.late_fee
@@ -986,19 +1092,166 @@ def update_late_fees():
             if late_fee != old_late_fee:
                 payment.status = 'overdue'
                 updated_count += 1
-                total_late_fee += late_fee
+                total_late_fee += late_fee if isinstance(late_fee, Decimal) else Decimal(str(late_fee))
         
         if updated_count > 0:
             db.session.commit()
         
-        current_app.logger.info(f"批量更新滞纳金：{updated_count} 条记录，总滞纳金：{total_late_fee}")
+        current_app.logger.info(f"批量更新滞纳金：{updated_count} 条记录，总滞纳金：{float(total_late_fee)}")
         
         return APIResponse.success({
             'updated_count': updated_count,
-            'total_late_fee': total_late_fee
+            'total_late_fee': float(total_late_fee)
         }, "滞纳金更新成功")
         
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"更新滞纳金失败：{str(e)}")
         return APIResponse.server_error("更新滞纳金失败")
+
+
+@payments_bp.route('/batch-update-status', methods=['POST'])
+@login_required
+@permission_required('edit')
+def batch_update_payment_status():
+    """
+    批量更新支付状态
+    
+    Request Body:
+        {
+            "payment_ids": [1, 2, 3],
+            "status": "paid"
+        }
+        
+    Response:
+        {
+            "success": true,
+            "message": "批量更新成功",
+            "data": {
+                "updated_count": 3,
+                "failed_count": 0,
+                "details": [...]
+            }
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return APIResponse.bad_request("请求数据不能为空")
+        
+        payment_ids = data.get('payment_ids', [])
+        status = data.get('status')
+        
+        if not payment_ids:
+            return APIResponse.bad_request("支付记录 ID 列表不能为空")
+        
+        if not isinstance(payment_ids, list):
+            return APIResponse.bad_request("payment_ids 必须是数组")
+        
+        if not status:
+            return APIResponse.bad_request("状态不能为空")
+        
+        valid_statuses = ['pending', 'paid', 'overdue', 'partial', 'refunded', 'cancelled']
+        if status not in valid_statuses:
+            return APIResponse.bad_request(f"状态必须是：{', '.join(valid_statuses)}")
+        
+        updated_count = 0
+        failed_count = 0
+        details = []
+        
+        for payment_id in payment_ids:
+            try:
+                payment = Payment.query.get(payment_id)
+                
+                if not payment:
+                    details.append({
+                        'payment_id': payment_id,
+                        'success': False,
+                        'message': '支付记录不存在'
+                    })
+                    failed_count += 1
+                    continue
+                
+                old_status = payment.status
+                
+                if status == 'paid':
+                    payment_date = payment.payment_date or date.today()
+                    late_fee, overdue_days = payment.calculate_late_fee(payment_date)
+                    total_amount = payment.get_total_amount()
+                    paid_amount = payment.paid_amount or total_amount
+                    payment.mark_as_paid(
+                        paid_amount=paid_amount,
+                        payment_date=payment_date,
+                        payment_method=payment.payment_method
+                    )
+                    payment.operator_id = g.user_id
+                    
+                    # 如果是押金支付，更新合同押金状态
+                    if payment.payment_type == 'deposit':
+                        contract = payment.contract_rel
+                        if contract:
+                            try:
+                                # 检查押金是否全额支付
+                                total_deposit_paid = sum(
+                                    p.paid_amount for p in contract.payments 
+                                    if p.payment_type == 'deposit' and p.status == 'paid'
+                                )
+                                
+                                # 如果押金全额支付，更新合同押金状态
+                                if total_deposit_paid >= contract.deposit_amount:
+                                    contract.update_deposit_status('paid')
+                            except ValueError as e:
+                                current_app.logger.warning(f"押金状态更新失败: {str(e)}")
+                    
+                    if payment.contract_id and payment.contract_rel and payment.contract_rel.tenant_id:
+                        from app.models.tenant import Tenant
+                        from app.utils.credit_score import CreditEventType, CreditScoreConfig
+                        
+                        tenant = Tenant.query.get(payment.contract_rel.tenant_id)
+                        if tenant and payment_date <= payment.due_date:
+                            config = CreditScoreConfig.get_event_config(CreditEventType.ON_TIME_PAYMENT)
+                            tenant.add_credit_record(
+                                event_type='on_time_payment',
+                                score_change=config['score_change'],
+                                description=f"{config['description']}（支付记录ID: {payment.id}）",
+                                related_id=payment.id
+                            )
+                            db.session.add(tenant)
+                else:
+                    payment.status = status
+                
+                details.append({
+                    'payment_id': payment_id,
+                    'success': True,
+                    'old_status': old_status,
+                    'new_status': status,
+                    'message': '更新成功'
+                })
+                updated_count += 1
+                
+            except Exception as e:
+                details.append({
+                    'payment_id': payment_id,
+                    'success': False,
+                    'message': str(e)
+                })
+                failed_count += 1
+        
+        if updated_count > 0:
+            db.session.commit()
+        
+        current_app.logger.info(
+            f"用户 {g.username} 批量更新支付状态：成功 {updated_count} 条，失败 {failed_count} 条"
+        )
+        
+        return APIResponse.success({
+            'updated_count': updated_count,
+            'failed_count': failed_count,
+            'details': details
+        }, f"批量更新成功：{updated_count} 条记录已更新")
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"批量更新支付状态失败：{str(e)}")
+        return APIResponse.server_error("批量更新支付状态失败")

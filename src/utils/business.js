@@ -11,7 +11,8 @@ export const houseStatusMap = {
   rented: { text: '已租', type: 'info' },
   maintenance: { text: '维护中', type: 'warning' },
   partially_rented: { text: '部分出租', type: 'warning' },
-  reserved: { text: '已预订', type: 'primary' }
+  reserved: { text: '已预订', type: 'primary' },
+  cancelled: { text: '已取消', type: 'danger' }
 }
 
 /**
@@ -26,8 +27,9 @@ export const houseTypeMap = {
  * 租客状态映射
  */
 export const tenantStatusMap = {
-  active: { text: '活跃', type: 'success' },
-  expired: { text: '已过期', type: 'warning' },
+  pending: { text: '待租', type: 'warning' },
+  active: { text: '在租', type: 'success' },
+  expired: { text: '已退租', type: 'info' },
   blacklisted: { text: '黑名单', type: 'danger' }
 }
 
@@ -36,10 +38,13 @@ export const tenantStatusMap = {
  */
 export const contractStatusMap = {
   draft: { text: '草稿', type: 'info' },
-  active: { text: '进行中', type: 'success' },
-  expired: { text: '已到期', type: 'warning' },
+  pending: { text: '待签约', type: 'warning' },
+  active: { text: '履行中', type: 'success' },
+  expired: { text: '已到期', type: 'info' },
   terminated: { text: '已终止', type: 'danger' },
-  renewed: { text: '已续签', type: 'primary' }
+  breached: { text: '已违约', type: 'danger' },
+  renewed: { text: '已续签', type: 'primary' },
+  cancelled: { text: '已取消', type: 'danger' }
 }
 
 /**
@@ -50,7 +55,8 @@ export const paymentStatusMap = {
   paid: { text: '已支付', type: 'success' },
   overdue: { text: '逾期', type: 'danger' },
   partial: { text: '部分支付', type: 'warning' },
-  refunded: { text: '已退款', type: 'info' }
+  refunded: { text: '已退款', type: 'info' },
+  cancelled: { text: '已取消', type: 'danger' }
 }
 
 /**
@@ -72,6 +78,20 @@ export const paymentTypeMap = {
   deposit: { text: '押金', type: 'info' },
   utility: { text: '水电煤', type: 'warning' },
   other: { text: '其他', type: 'default' }
+}
+
+/**
+ * 付款方式映射（合同）
+ */
+export const paymentCycleMap = {
+  press_one_pay_one: { text: '押一付一', months: 1 },
+  press_one_pay_three: { text: '押一付三', months: 3 },
+  press_one_pay_six: { text: '押一付六', months: 6 },
+  press_one_pay_twelve: { text: '押一付十二', months: 12 },
+  '月付': { text: '月付', months: 1 },
+  '季付': { text: '季付', months: 3 },
+  '半年付': { text: '半年付', months: 6 },
+  '年付': { text: '年付', months: 12 }
 }
 
 /**

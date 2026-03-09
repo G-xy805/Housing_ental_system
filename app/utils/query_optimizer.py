@@ -63,7 +63,9 @@ class QueryOptimizer:
         - owner: 负责员工
         - landlord_rel: 房东信息
         
-        注意：media 关系使用 lazy='dynamic'，不支持 eager loading，
+        注意：
+        - media 关系使用 lazy='dynamic'，不支持 eager loading
+        - rooms 关系使用 lazy='dynamic'，不支持 eager loading
         在 format_house_response 函数中手动查询
         
         Returns:
@@ -74,7 +76,7 @@ class QueryOptimizer:
         return [
             joinedload(House.owner),
             joinedload(House.landlord_rel),
-            # media 使用 lazy='dynamic'，不支持 eager loading
+            # media 和 rooms 使用 lazy='dynamic'，不支持 eager loading
         ]
     
     # ==================== 合同相关优化 ====================

@@ -27,9 +27,9 @@ class LandlordContract(BaseModel):
     end_date = db.Column(db.Date, nullable=False, comment='结束日期')
     
     # 金额信息
-    contract_amount = db.Column(db.Float, nullable=False, comment='承包总金额（元）')
-    service_fee_rate = db.Column(db.Float, nullable=False, comment='服务费率（%）')
-    minimum_fee = db.Column(db.Float, comment='最低服务费（元）')
+    contract_amount = db.Column(db.Numeric(10, 2), nullable=False, comment='承包总金额（元）')
+    service_fee_rate = db.Column(db.Numeric(5, 2), nullable=False, comment='服务费率（%）')
+    minimum_fee = db.Column(db.Numeric(10, 2), comment='最低服务费（元）')
     payment_cycle = db.Column(db.Integer, default=1, comment='付款周期（月数）')
     
     # 合同状态：draft-草稿，active-生效中，expired-已过期，terminated-已终止
@@ -181,3 +181,33 @@ class LandlordContract(BaseModel):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+    
+    def get_cascade_relations(self):
+        """
+        获取需要级联处理的关系定义
+        
+        房东合同删除规则：
+        - 如果是活跃合同（active），不允许删除
+        - 关联的房源需要解除关联
+        """
+        return {}
+    
+    def validate_delete(self):
+        """
+        验证是否可以删除房东合同
+        
+        特殊规则：
+        - 如果是活跃合同（active），不允许删除
+        
+        Returns:
+            Tuple[bool, List[str]]: (是否可以删除, 错误消息列表)
+        """
+        # 先调用父类的基础验证
+        can_delete, errors = super().validate_delete()
+        
+        # 检查是否是活跃合同
+        if self.status == 'active':
+            errors.append('活跃合同无法删除，请先终止合同')
+            can_delete = False
+        
+        return can_delete, errors

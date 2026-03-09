@@ -4,7 +4,7 @@
 提供合同模型的序列化和验证
 """
 from datetime import date
-from marshmallow import fields, validates, ValidationError, post_dump
+from marshmallow import fields, validates, ValidationError, post_dump, validate
 from .base import BaseSchema, TimestampMixin
 
 
@@ -22,11 +22,15 @@ class ContractSchema(BaseSchema, TimestampMixin):
     # 租赁信息
     start_date = fields.Date(required=True)
     end_date = fields.Date(required=True)
-    rent_amount = fields.Float(required=True)
-    deposit_amount = fields.Float(required=True)
+    rent_amount = fields.Decimal(required=True, places=2, as_string=False)
+    deposit_amount = fields.Decimal(required=True, places=2, as_string=False)
     
-    # 付款方式
-    payment_type = fields.Str(validate=lambda x: x in ['月付', '季付', '半年付', '年付'])
+    # 付款方式（支持英文 key 和中文值，兼容旧数据）
+    payment_type = fields.Str(validate=validate.OneOf([
+        'press_one_pay_one', 'press_one_pay_three', 
+        'press_one_pay_six', 'press_one_pay_twelve',
+        '月付', '季付', '半年付', '年付'  # 兼容旧数据
+    ]))
     payment_cycle = fields.Int(validate=lambda x: x > 0)
     
     # 状态
@@ -60,7 +64,7 @@ class ContractSchema(BaseSchema, TimestampMixin):
     is_expired = fields.Bool(dump_only=True)
     is_expiring_soon = fields.Bool(dump_only=True)
     days_until_expiry = fields.Int(dump_only=True)
-    total_rent = fields.Float(dump_only=True)
+    total_rent = fields.Decimal(dump_only=True, places=2, as_string=False)
     
     class Meta:
         fields = [
@@ -112,13 +116,17 @@ class ContractCreateSchema(BaseSchema):
     
     start_date = fields.Date(required=True)
     end_date = fields.Date(required=True)
-    rent_amount = fields.Float(required=True, validate=lambda x: x > 0)
-    deposit_amount = fields.Float(required=True, validate=lambda x: x >= 0)
+    rent_amount = fields.Decimal(required=True, places=2, as_string=False, validate=lambda x: x > 0)
+    deposit_amount = fields.Decimal(required=True, places=2, as_string=False, validate=lambda x: x >= 0)
     
-    payment_type = fields.Str(validate=lambda x: x in ['月付', '季付', '半年付', '年付'])
+    payment_type = fields.Str(validate=validate.OneOf([
+        'press_one_pay_one', 'press_one_pay_three', 
+        'press_one_pay_six', 'press_one_pay_twelve',
+        '月付', '季付', '半年付', '年付'  # 兼容旧数据
+    ]))
     payment_cycle = fields.Int(validate=lambda x: x > 0)
     
-    status = fields.Str(validate=lambda x: x in ['draft', 'active', 'expired', 'terminated'])
+    status = fields.Str(validate=validate.OneOf(['draft', 'pending', 'active', 'expired', 'terminated', 'breached', 'renewed']))
     contract_file = fields.Str(allow_none=True)
     remark = fields.Str(allow_none=True)
     
@@ -139,6 +147,24 @@ class ContractCreateSchema(BaseSchema):
         from app.models import Tenant
         if not Tenant.query.get(value):
             raise ValidationError('租客不存在')
+    
+    @validates('room_id')
+    def validate_room_id(self, value: int, **kwargs):
+        """验证房间 ID"""
+        if 'house_id' in self.data:
+            house_id = self.data['house_id']
+            from app.models import House, Room
+            house = House.query.get(house_id)
+            if house and house.rental_type == 'shared':
+                if not value:
+                    raise ValidationError('合租房源必须选择房间')
+                room = Room.query.get(value)
+                if not room:
+                    raise ValidationError('房间不存在')
+                if room.house_id != house_id:
+                    raise ValidationError('所选房间不属于该房源')
+                if room.status != 'available':
+                    raise ValidationError('所选房间状态不是可租')
 
 
 class ContractUpdateSchema(BaseSchema):
@@ -151,13 +177,17 @@ class ContractUpdateSchema(BaseSchema):
     
     start_date = fields.Date(allow_none=True)
     end_date = fields.Date(allow_none=True)
-    rent_amount = fields.Float(allow_none=True, validate=lambda x: x > 0 if x else True)
-    deposit_amount = fields.Float(allow_none=True, validate=lambda x: x >= 0 if x else True)
+    rent_amount = fields.Decimal(allow_none=True, places=2, as_string=False, validate=lambda x: x > 0 if x else True)
+    deposit_amount = fields.Decimal(allow_none=True, places=2, as_string=False, validate=lambda x: x >= 0 if x else True)
     
-    payment_type = fields.Str(validate=lambda x: x in ['月付', '季付', '半年付', '年付'])
+    payment_type = fields.Str(validate=validate.OneOf([
+        'press_one_pay_one', 'press_one_pay_three', 
+        'press_one_pay_six', 'press_one_pay_twelve',
+        '月付', '季付', '半年付', '年付'  # 兼容旧数据
+    ]))
     payment_cycle = fields.Int(validate=lambda x: x > 0)
     
-    status = fields.Str(validate=lambda x: x in ['draft', 'active', 'expired', 'terminated'])
+    status = fields.Str(validate=validate.OneOf(['draft', 'pending', 'active', 'expired', 'terminated', 'breached', 'renewed']))
     contract_file = fields.Str(allow_none=True)
     remark = fields.Str(allow_none=True)
     

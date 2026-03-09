@@ -2,9 +2,9 @@
 
 ## 1. 数据库模型概览
 
-本系统采用 SQLAlchemy ORM 框架设计数据库模型，包含以下 14 个核心模型：
+本系统采用 SQLAlchemy ORM 框架设计数据库模型，包含以下 18 个核心模型：
 
-### 1.1 核心业务模型（9个）
+### 1.1 核心业务模型（11个）
 
 | 模型名称 | 表名 | 描述 |
 |---------|------|------|
@@ -13,12 +13,22 @@
 | House | houses | 房源表（支持整租/合租，含地址、配套设施，关联房东和负责员工） |
 | Room | rooms | 房间表（合租场景，独立租金和状态） |
 | Tenant | tenants | 租客表（含紧急联系人、工作信息，身份证号加密） |
-| Contract | contracts | 租赁合同表（支持合租合同，自动编号） |
+| Contract | contracts | 租赁合同表（支持合租合同、乐观锁、押金状态跟踪，自动编号） |
 | LandlordContract | landlord_contracts | 承包合同表（平台与房东的合作合同，关联多个房源） |
 | Payment | payments | 支付记录表（支持滞纳金、多种支付方式） |
+| DepositRefund | deposit_refunds | 押金退款表（管理合同结束后的押金退款流程） |
 | Media | media | 多媒体文件表（图片/视频/文档） |
+| StartupTaskRecord | startup_task_records | 启动任务执行记录表（记录启动任务执行状态） |
 
-### 1.2 审计和安全模型（5个）
+### 1.2 数据归档模型（3个）
+
+| 模型名称 | 表名 | 描述 |
+|---------|------|------|
+| ContractArchive | contracts_archive | 合同归档表（存储已过期或已终止的合同数据） |
+| PaymentArchive | payments_archive | 支付记录归档表（存储已完成或已取消的支付记录） |
+| ArchiveRecord | archive_records | 归档操作记录表（记录每次归档操作的详细信息） |
+
+### 1.3 审计和安全模型（5个）
 
 | 模型名称 | 表名 | 描述 |
 |---------|------|------|
@@ -455,12 +465,14 @@ page = House.query.paginate(page=1, per_page=20)
 - N:1 → House（合同关联房源）
 - N:1 → Room（合同关联房间，合租时）
 - N:1 → Tenant（合同关联租客，tenant_rel 关系）
+- N:1 → Contract（原合同，续签时 original_contract 关系）
 - 1:N → Payment（合同有多个支付记录，contract_rel 关系）
 
 **字段说明：**
 ```python
 - id: 主键
 - contract_no: 合同编号（自动生成，唯一，非空，格式：HT+年月日+8位随机数）
+- version: 版本号（乐观锁，默认 0，非空）
 - title: 合同标题（非空）
 - description: 合同描述
 - start_date: 起租日期（非空）
@@ -470,6 +482,8 @@ page = House.query.paginate(page=1, per_page=20)
 - payment_type: 付款类型（月付/季付/半年付/年付）
 - payment_cycle: 付款周期（月数）
 - status: 状态（draft-草稿/active-生效中/expired-已过期/terminated-已终止）
+- deposit_status: 押金状态（pending-待支付/paid-已支付/transferred-已转移/refunded-已退款）
+- original_contract_id: 原合同 ID（外键，续签时记录原合同）
 - contract_file: 合同文件路径
 - remark: 备注
 - house_id: 房源 ID（外键，非空）
@@ -479,6 +493,29 @@ page = House.query.paginate(page=1, per_page=20)
 - updated_at: 更新时间
 - is_active: 是否激活
 - deleted_at: 软删除时间戳
+```
+
+**乐观锁机制：**
+```python
+- version: 版本号字段，用于并发控制
+- check_version(expected_version): 检查版本号是否匹配
+- increment_version(): 递增版本号
+- update_with_optimistic_lock(contract_id, expected_version, update_data): 使用乐观锁更新合同
+- OptimisticLockError: 版本冲突异常
+```
+
+**押金状态管理：**
+```python
+DEPOSIT_STATUS = {
+    'pending': '待支付',     # 合同创建后的初始状态
+    'paid': '已支付',        # 租客已支付押金
+    'transferred': '已转移', # 续签时押金转移到新合同
+    'refunded': '已退款'     # 合同结束后押金已退还
+}
+
+- update_deposit_status(new_status): 更新押金状态（带状态转换验证）
+- is_deposit_paid(): 检查押金是否已支付
+- can_transfer_deposit(): 检查押金是否可以转移（用于续签）
 ```
 
 **事件监听器：**
@@ -491,7 +528,9 @@ page = House.query.paginate(page=1, per_page=20)
 - is_expiring_soon(days=30): 检查是否即将到期
 - get_days_until_expiry(): 获取距离到期天数
 - calculate_total_rent(): 计算合同期内的总租金（支持按天计算剩余天数）
-- to_dict(): 转换为字典（包含房源、房间、租客信息，自动计算过期状态和总租金）
+- get_cascade_relations(): 获取需要级联处理的关系定义
+- validate_delete(): 验证是否可以删除合同（活跃合同和有未完成支付的不允许删除）
+- to_dict(): 转换为字典（包含房源、房间、租客信息，自动计算过期状态和总租金，押金状态信息）
 ```
 
 **索引：**
@@ -499,7 +538,10 @@ page = House.query.paginate(page=1, per_page=20)
 - idx_contracts_room_id: room_id 字段索引
 - idx_contracts_tenant_id: tenant_id 字段索引
 - idx_contracts_status: status 字段索引
+- idx_contracts_deposit_status: deposit_status 字段索引
 - idx_contracts_dates: (start_date, end_date) 复合索引
+- idx_contract_status_date: (status, created_at) 复合索引（性能优化）
+- idx_contract_tenant_status: (tenant_id, status) 复合索引（性能优化）
 
 ---
 
@@ -551,7 +593,69 @@ page = House.query.paginate(page=1, per_page=20)
 
 ---
 
-### 4.8 Payment（支付表）
+### 4.8 DepositRefund（押金退款表）
+
+**关系：**
+- N:1 → Contract（退款关联合同，contract 关系）
+- N:1 → Tenant（退款关联租客，tenant 关系）
+- N:1 → House（退款关联房源，house 关系）
+- N:1 → User（处理人，processor 关系）
+
+**字段说明：**
+```python
+- id: 主键
+- contract_id: 合同 ID（外键，非空）
+- tenant_id: 租客 ID（外键，非空）
+- house_id: 房源 ID（外键，非空）
+- original_deposit: 原始押金金额（非空）
+- deductions: 扣款项列表（JSON 格式，默认空数组）
+- total_deduction: 总扣款金额（默认 0）
+- refund_amount: 实际退款金额（非空）
+- status: 退款状态（pending-待处理/processed-已处理/completed-已完成/cancelled-已取消）
+- processed_by: 处理人 ID（外键）
+- processed_at: 处理时间
+- completed_at: 完成时间
+- remark: 备注
+- created_at: 创建时间
+- updated_at: 更新时间
+- is_active: 是否激活
+- deleted_at: 软删除时间戳
+```
+
+**扣款项类型：**
+```python
+DEDUCTION_TYPES = {
+    'unpaid_rent': '未付租金',
+    'unpaid_utilities': '未付水电费',
+    'late_fees': '滞纳金',
+    'damage_compensation': '损坏赔偿',
+    'other': '其他扣款'
+}
+```
+
+**业务方法：**
+```python
+- calculate_total_deduction(): 计算总扣款金额
+- add_deduction(deduction_type, amount, description): 添加扣款项
+- remove_deduction(index): 移除扣款项
+- process(processed_by): 处理退款
+- complete(): 完成退款
+- can_complete(): 检查是否可以完成退款（返回元组：是否可以完成, 错误消息）
+- cancel(reason): 取消退款
+- get_deduction_summary(): 获取扣款项汇总
+- to_dict(): 转换为字典（包含合同、租客、房源、处理人信息，押金状态信息）
+```
+
+**索引：**
+- idx_deposit_refunds_contract_id: contract_id 字段索引
+- idx_deposit_refunds_tenant_id: tenant_id 字段索引
+- idx_deposit_refunds_house_id: house_id 字段索引
+- idx_deposit_refunds_status: status 字段索引
+- idx_deposit_refunds_processed_by: processed_by 字段索引
+
+---
+
+### 4.9 Payment（支付表）
 
 **关系：**
 - N:1 → Contract（支付属于某个合同，contract_rel 关系）
@@ -609,7 +713,7 @@ page = House.query.paginate(page=1, per_page=20)
 
 ---
 
-### 4.9 Media（多媒体表）
+### 4.10 Media（多媒体表）
 
 **关系：**
 - N:1 → House（媒体属于某个房源）
@@ -660,9 +764,191 @@ ALLOWED_MIME_TYPES = {
 - idx_media_file_type: file_type 字段索引
 - idx_media_is_cover: is_cover 字段索引
 
-## 5. 审计和安全模型详细说明
+---
 
-### 5.1 EncryptionAuditLog（加密访问审计日志表）
+### 4.11 StartupTaskRecord（启动任务执行记录表）
+
+**功能：** 记录应用启动时执行的定时任务状态，确保任务只执行一次。
+
+**字段说明：**
+```python
+- id: 主键
+- task_name: 任务名称（非空）
+- task_date: 任务日期（非空）
+- status: 状态（pending-待执行/running-执行中/completed-已完成/failed-执行失败）
+- started_at: 开始时间
+- completed_at: 完成时间
+- total_records: 总记录数
+- processed_records: 已处理记录数
+- failed_records: 失败记录数
+- execution_time: 执行时间（秒）
+- error_message: 错误信息
+- created_at: 创建时间
+- updated_at: 更新时间
+- is_active: 是否激活
+- deleted_at: 软删除时间戳
+```
+
+**业务方法：**
+```python
+- to_dict(): 转换为字典
+- get_task_status(task_name, task_date): 获取任务状态（类方法）
+- mark_running(task_name, task_date): 标记任务开始执行（类方法）
+- mark_completed(task_name, task_date, processed_records, failed_records, execution_time): 标记任务完成（类方法）
+- mark_failed(task_name, task_date, error_message): 标记任务失败（类方法）
+```
+
+**索引：**
+- idx_startup_task_name_date: (task_name, task_date) 复合唯一索引
+
+## 5. 数据归档模型详细说明
+
+### 5.1 ContractArchive（合同归档表）
+
+**功能：** 存储已过期或已终止的合同数据，不设置外键约束避免数据完整性问题。
+
+**字段说明：**
+```python
+- id: 主键
+- archived_at: 归档时间（非空）
+- archive_reason: 归档原因（expired-过期/terminated-终止/manual-手动）
+- original_id: 原合同 ID（非空）
+- contract_no: 合同编号（非空）
+- title: 合同标题（非空）
+- description: 合同描述
+- start_date: 起租日期（非空）
+- end_date: 结束日期（非空）
+- rent_amount: 租金金额（元/月，非空）
+- deposit_amount: 押金金额（元，非空）
+- payment_type: 付款类型
+- payment_cycle: 付款周期（月数）
+- status: 合同状态
+- deposit_status: 押金状态
+- original_contract_id: 原合同 ID（续签时）
+- house_id: 房源 ID（非空）
+- room_id: 房间 ID
+- tenant_id: 租客 ID（非空）
+- house_title: 房源标题（冗余字段）
+- house_address: 房源地址（冗余字段）
+- tenant_name: 租客姓名（冗余字段）
+- tenant_phone: 租客电话（冗余字段）
+- contract_file: 合同文件路径
+- remark: 备注
+- created_at: 创建时间
+- updated_at: 更新时间
+- is_active: 是否激活
+- deleted_at: 软删除时间戳
+```
+
+**业务方法：**
+```python
+- archive_from_contract(contract, archive_reason): 从合同对象创建归档记录（类方法）
+- to_dict(): 转换为字典
+```
+
+**索引：**
+- idx_contracts_archive_archived_at: archived_at 字段索引
+- idx_contracts_archive_original_id: original_id 字段索引
+- idx_contracts_archive_house_id: house_id 字段索引
+- idx_contracts_archive_tenant_id: tenant_id 字段索引
+- idx_contracts_archive_dates: (start_date, end_date) 复合索引
+- idx_contracts_archive_status: status 字段索引
+
+---
+
+### 5.2 PaymentArchive（支付记录归档表）
+
+**功能：** 存储已完成或已取消的支付记录，不设置外键约束避免数据完整性问题。
+
+**字段说明：**
+```python
+- id: 主键
+- archived_at: 归档时间（非空）
+- archive_reason: 归档原因（completed-完成/cancelled-取消/manual-手动）
+- original_id: 原支付记录 ID（非空）
+- payment_no: 支付编号（非空）
+- amount: 应缴金额（非空）
+- paid_amount: 实缴金额
+- payment_type: 支付类型（非空）
+- payment_method: 支付方式
+- period_start: 支付周期开始
+- period_end: 周期结束
+- payment_date: 实际支付日期
+- due_date: 应缴日期（非空）
+- confirmed_date: 确认到账日期
+- late_fee: 滞纳金金额
+- late_fee_rate: 滞纳金比例（每日）
+- overdue_days: 逾期天数
+- status: 支付状态
+- contract_id: 合同 ID
+- operator_id: 操作人 ID
+- contract_no: 合同编号（冗余字段）
+- tenant_name: 租客姓名（冗余字段）
+- tenant_phone: 租客电话（冗余字段）
+- house_address: 房源地址（冗余字段）
+- remark: 备注
+- receipt_file: 收据/凭证文件路径
+- created_at: 创建时间
+- updated_at: 更新时间
+- is_active: 是否激活
+- deleted_at: 软删除时间戳
+```
+
+**业务方法：**
+```python
+- archive_from_payment(payment, archive_reason): 从支付记录对象创建归档记录（类方法）
+- to_dict(): 转换为字典
+```
+
+**索引：**
+- idx_payments_archive_archived_at: archived_at 字段索引
+- idx_payments_archive_original_id: original_id 字段索引
+- idx_payments_archive_contract_id: contract_id 字段索引
+- idx_payments_archive_due_date: due_date 字段索引
+- idx_payments_archive_status: status 字段索引
+- idx_payments_archive_payment_type: payment_type 字段索引
+
+---
+
+### 5.3 ArchiveRecord（归档操作记录表）
+
+**功能：** 记录每次归档操作的详细信息，用于审计和追踪。
+
+**字段说明：**
+```python
+- id: 主键
+- archive_type: 归档类型（contract-合同/payment-支付，非空）
+- archive_date: 归档日期（非空）
+- archive_reason: 归档原因
+- total_records: 总记录数
+- archived_records: 已归档记录数
+- failed_records: 失败记录数
+- started_at: 开始时间
+- completed_at: 完成时间
+- execution_time: 执行时间（秒）
+- date_range_start: 日期范围开始
+- date_range_end: 日期范围结束
+- error_message: 错误信息
+- remark: 备注
+- created_at: 创建时间
+- updated_at: 更新时间
+- is_active: 是否激活
+- deleted_at: 软删除时间戳
+```
+
+**业务方法：**
+```python
+- to_dict(): 转换为字典
+```
+
+**索引：**
+- idx_archive_records_type: archive_type 字段索引
+- idx_archive_records_date: archive_date 字段索引
+- idx_archive_records_status: is_active 字段索引
+
+## 6. 审计和安全模型详细说明
+
+### 6.1 EncryptionAuditLog（加密访问审计日志表）
 
 **功能：** 记录所有敏感数据的加密和解密操作，用于安全审计和合规性检查。
 
@@ -704,7 +990,7 @@ ALLOWED_MIME_TYPES = {
 
 ---
 
-### 5.2 SensitiveDataAuditLog（敏感数据访问审计日志表）
+### 6.2 SensitiveDataAuditLog（敏感数据访问审计日志表）
 
 **功能：** 记录所有敏感数据的访问、修改、删除操作，用于安全审计和合规性检查。
 
@@ -915,9 +1201,9 @@ SENSITIVE_FIELDS = {
 - idx_password_history_password_set_at: password_set_at 字段索引
 - idx_password_history_is_expired: is_expired 字段索引
 
-## 6. 数据验证和约束
+## 7. 数据验证和约束
 
-### 6.1 数据库约束
+### 7.1 数据库约束
 
 **NOT NULL 约束：**
 - User: username, password_hash
@@ -928,6 +1214,7 @@ SENSITIVE_FIELDS = {
 - Contract: contract_no, title, start_date, end_date, rent_amount, deposit_amount, house_id, tenant_id
 - LandlordContract: contract_no, title, start_date, end_date, contract_amount, service_fee_rate, landlord_id
 - Payment: payment_no, amount, payment_type, due_date
+- DepositRefund: contract_id, tenant_id, house_id, original_deposit, refund_amount
 - Media: file_name, file_path, file_type
 
 **UNIQUE 约束：**
@@ -947,15 +1234,20 @@ SENSITIVE_FIELDS = {
 - Contract.house_id → Houses.id
 - Contract.room_id → Rooms.id（可选，合租时）
 - Contract.tenant_id → Tenants.id
+- Contract.original_contract_id → Contracts.id（续签时）
 - LandlordContract.landlord_id → Landlords.id
 - Payment.contract_id → Contracts.id
 - Payment.operator_id → Users.id
+- DepositRefund.contract_id → Contracts.id
+- DepositRefund.tenant_id → Tenants.id
+- DepositRefund.house_id → Houses.id
+- DepositRefund.processed_by → Users.id
 - Media.house_id → Houses.id（可为空）
 - Media.uploaded_by → Users.id
 - User.created_by → Users.id
 - PasswordHistory.user_id → Users.id
 
-### 6.2 应用层验证
+### 7.2 应用层验证
 
 - **角色权限验证：** User.has_permission(permission)
 - **身份证号验证：** Tenant.verify_id_card(), Landlord.verify_id_card(), User.verify_id_card()
@@ -968,8 +1260,11 @@ SENSITIVE_FIELDS = {
 - **MIME 类型验证：** Media.is_allowed_type()
 - **密码历史检查：** PasswordHistory.check_password_in_history()
 - **密码过期检查：** PasswordHistory.is_password_expired()
+- **押金状态验证：** Contract.update_deposit_status(), Contract.can_transfer_deposit()
+- **乐观锁验证：** Contract.check_version(), Contract.update_with_optimistic_lock()
+- **退款状态验证：** DepositRefund.can_complete()
 
-### 6.3 安全特性
+### 7.3 安全特性
 
 **加密存储：**
 - 密码加密：使用 Werkzeug 的 generate_password_hash/check_password_hash
@@ -997,9 +1292,13 @@ SENSITIVE_FIELDS = {
 - 密码过期管理：支持密码过期时间设置
 - 密码过期提醒：提前通知用户密码即将过期
 
-## 7. SQLAlchemy ORM 最佳实践
+**乐观锁机制：**
+- 合同并发更新保护：Contract.version 字段
+- 版本冲突检测：OptimisticLockError 异常
 
-### 7.1 模型继承
+## 8. SQLAlchemy ORM 最佳实践
+
+### 8.1 模型继承
 
 使用抽象基类 BaseModel，提供通用字段：
 - id：主键
@@ -1008,7 +1307,7 @@ SENSITIVE_FIELDS = {
 - is_active：是否激活
 - deleted_at：软删除时间戳
 
-### 7.2 关系定义
+### 8.2 关系定义
 
 **加载策略：**
 - `lazy='dynamic'`：延迟加载，支持链式查询（如 House.rooms, User.houses）
@@ -1028,32 +1327,33 @@ SENSITIVE_FIELDS = {
 **外键指定：**
 - `foreign_keys`：明确指定外键字段（如 User.created_employees, Media.uploaded_by）
 
-### 7.3 序列化
+### 8.3 序列化
 
 所有模型实现 to_dict() 方法，支持 API 响应：
 - BaseModel.to_dict()：基础实现，转换所有字段，datetime 格式化为字符串
 - 子类重写 to_dict()：添加关联对象信息
 - 敏感字段过滤：to_dict() 方法自动移除敏感字段
 
-### 7.4 业务逻辑封装
+### 8.4 业务逻辑封装
 
 将业务逻辑封装在模型方法中，保持业务规则与数据模型紧密耦合：
 - User：权限检查、密码管理、JWT Token、账号锁定
 - House：状态自动更新、空闲房间查询
 - Landlord/Tenant：身份证号加密/解密验证
-- Contract：到期检查、租金计算
+- Contract：到期检查、租金计算、押金状态管理、乐观锁
 - Payment：滞纳金精确计算、支付状态管理
+- DepositRefund：扣款项管理、退款状态跟踪
 - Media：MIME 类型验证、文件大小格式化
 - LandlordContract：服务费计算、合同期限计算
 - PasswordHistory：密码历史管理、过期检查
 
-### 7.5 事件监听器
+### 8.5 事件监听器
 
 使用 SQLAlchemy 事件监听器实现自动化处理：
 - Room.after_update：房间状态变化时自动更新房源状态
 - Contract.after_update：合同终止时自动取消未支付记录
 
-## 8. 模型使用示例
+## 9. 模型使用示例
 
 ```python
 from datetime import date, timedelta, datetime
@@ -1338,23 +1638,23 @@ with app.app_context():
     })
 ```
 
-## 9. 扩展性考虑
+## 10. 扩展性考虑
 
-### 9.1 性能优化
+### 10.1 性能优化
 
 - **数据库索引**：已为所有外键字段和常用查询字段创建索引
 - **查询优化**：使用 lazy='dynamic' 延迟加载，避免 N+1 查询问题
 - **批量操作**：使用 db.session.add_all() 批量插入数据
 - **分页查询**：使用 paginate() 方法进行分页
 
-### 9.2 分表策略
+### 10.2 分表策略
 
 当数据量增长时，可考虑：
 - **Payment 表按时间分表**：按月或年分表
 - **Contract 表按状态分表**：将历史合同和当前合同分开存储
 - **审计日志表按时间分表**：按月分表存储审计日志
 
-### 9.3 读写分离
+### 10.3 读写分离
 
 使用 SQLAlchemy 的 binds 配置，支持主从数据库：
 ```python
@@ -1364,7 +1664,7 @@ SQLALCHEMY_BINDS = {
 }
 ```
 
-### 9.4 缓存层
+### 10.4 缓存层
 
 可在查询频繁的地方添加 Redis 缓存：
 - 房源列表查询：缓存热门区域的房源列表
@@ -1372,20 +1672,20 @@ SQLALCHEMY_BINDS = {
 - 用户信息缓存：缓存频繁访问的用户信息
 - 配置信息缓存：缓存系统配置参数
 
-### 9.5 水平扩展
+### 10.5 水平扩展
 
 - **微服务架构**：将用户服务、房源服务、合同服务、支付服务拆分
 - **API 网关**：统一入口，负载均衡
 - **消息队列**：使用 RabbitMQ/Kafka 处理异步任务
 
-### 9.6 监控和日志
+### 10.6 监控和日志
 
 - **数据库监控**：慢查询日志、连接池监控
 - **业务监控**：合同到期率、支付逾期率、房源出租率
 - **安全监控**：敏感数据访问预警、异常登录检测
 - **错误追踪**：使用 Sentry 等工具追踪异常
 
-## 10. 总结
+## 11. 总结
 
 本数据库模型设计具有以下特点：
 
@@ -1428,3 +1728,9 @@ SQLALCHEMY_BINDS = {
 12. **角色分离**：User 表仅用于内部员工，Landlord 表管理房东信息，职责清晰
 
 13. **平台模式**：支持平台与房东的承包合作模式，通过 LandlordContract 实现灵活的商业模式
+
+14. **押金管理**：支持押金状态跟踪、押金转移（续签）、押金退款流程
+
+15. **乐观锁机制**：合同并发更新保护，防止数据冲突
+
+16. **数据归档**：支持合同和支付记录的归档，优化数据库性能

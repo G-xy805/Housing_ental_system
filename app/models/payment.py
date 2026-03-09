@@ -3,6 +3,7 @@
 """
 from datetime import datetime, date, timedelta
 from decimal import Decimal
+from typing import Tuple, Optional
 from .base import db, BaseModel
 
 
@@ -25,8 +26,8 @@ class Payment(BaseModel):
     payment_no = db.Column(db.String(50), unique=True, nullable=False, comment='支付编号')
     
     # 支付信息
-    amount = db.Column(db.Float, nullable=False, comment='应缴金额')
-    paid_amount = db.Column(db.Float, default=0, comment='实缴金额')
+    amount = db.Column(db.Numeric(10, 2), nullable=False, comment='应缴金额')
+    paid_amount = db.Column(db.Numeric(10, 2), default=0, comment='实缴金额')
     
     # 支付类型：rent-租金，deposit-押金，utility-水电费，other-其他
     payment_type = db.Column(db.String(20), nullable=False, comment='支付类型')
@@ -44,8 +45,8 @@ class Payment(BaseModel):
     confirmed_date = db.Column(db.DateTime, comment='确认到账日期')
     
     # 滞纳金
-    late_fee = db.Column(db.Float, default=0, comment='滞纳金金额')
-    late_fee_rate = db.Column(db.Float, default=0.0005, comment='滞纳金比例（每日）')
+    late_fee = db.Column(db.Numeric(10, 2), default=Decimal('0.00'), comment='滞纳金金额')
+    late_fee_rate = db.Column(db.Numeric(8, 6), default=Decimal('0.0005'), comment='滞纳金比例（每日）')
     overdue_days = db.Column(db.Integer, default=0, comment='逾期天数')
     
     # 状态：pending-待支付，paid-已支付，overdue-逾期，partial-部分支付，refunded-已退款，cancelled-已取消
@@ -69,6 +70,9 @@ class Payment(BaseModel):
         db.Index('idx_payments_status', 'status'),
         db.Index('idx_payments_due_date', 'due_date'),
         db.Index('idx_payments_payment_type', 'payment_type'),
+        # P2-1: 性能优化索引
+        db.Index('idx_payment_status_date', 'status', 'due_date'),  # 按状态筛选并按到期日期排序
+        db.Index('idx_payment_contract_status', 'contract_id', 'status'),  # 按合同查询支付状态
     )
     
     # 关系
@@ -99,7 +103,7 @@ class Payment(BaseModel):
         unique_id = uuid.uuid4().hex[:8].upper()
         return f'PY{timestamp}{unique_id}'
     
-    def calculate_late_fee(self, current_date=None):
+    def calculate_late_fee(self, current_date: Optional[date] = None) -> Tuple[Decimal, int]:
         """
         计算滞纳金
         
@@ -114,7 +118,7 @@ class Payment(BaseModel):
         
         # 如果已支付或未到期，不计算滞纳金
         if self.status == 'paid' or current_date <= self.due_date:
-            return 0, 0
+            return Decimal('0.00'), 0
         
         # 计算逾期天数
         overdue_days = (current_date - self.due_date).days
@@ -122,20 +126,30 @@ class Payment(BaseModel):
         
         # 计算滞纳金：应缴金额 × 日利率 × 逾期天数
         base_amount = Decimal(str(self.amount))
-        rate = Decimal(str(self.late_fee_rate or LATE_FEE_RATE))
+        rate = Decimal(str(self.late_fee_rate)) if self.late_fee_rate else LATE_FEE_RATE
         calculated_late_fee = base_amount * rate * overdue_days
         
         # 应用滞纳金上限
-        max_late_fee = base_amount * Decimal(str(LATE_FEE_MAX_RATE))
+        max_late_fee = base_amount * LATE_FEE_MAX_RATE
         final_late_fee = min(calculated_late_fee, max_late_fee)
         
-        self.late_fee = float(final_late_fee)
-        return float(final_late_fee), overdue_days
+        # 确保返回 Decimal 类型，保留两位小数
+        final_late_fee = final_late_fee.quantize(Decimal('0.01'))
+        self.late_fee = final_late_fee
+        return final_late_fee, overdue_days
     
-    def get_total_amount(self):
-        """获取应缴总额（含滞纳金）"""
+    def get_total_amount(self) -> Decimal:
+        """
+        获取应缴总额（含滞纳金）
+        
+        Returns:
+            Decimal: 应缴总额
+        """
         self.calculate_late_fee()
-        return self.amount + self.late_fee
+        # 确保 amount 和 late_fee 类型一致
+        amount = Decimal(str(self.amount)) if not isinstance(self.amount, Decimal) else self.amount
+        late_fee = Decimal(str(self.late_fee)) if self.late_fee and not isinstance(self.late_fee, Decimal) else (self.late_fee or Decimal('0.00'))
+        return amount + late_fee
     
     def mark_as_paid(self, paid_amount, payment_date=None, payment_method=None):
         """
@@ -149,19 +163,23 @@ class Payment(BaseModel):
         if payment_date is None:
             payment_date = date.today()
         
+        if not isinstance(paid_amount, Decimal):
+            paid_amount = Decimal(str(paid_amount))
+        
         self.paid_amount = paid_amount
         self.payment_date = payment_date
         self.payment_method = payment_method
         self.confirmed_date = datetime.now()
         
-        # 计算滞纳金
         self.calculate_late_fee(payment_date)
         
-        # 判断支付状态
-        total_amount = self.get_total_amount()
+        amount = Decimal(str(self.amount)) if not isinstance(self.amount, Decimal) else self.amount
+        late_fee = Decimal(str(self.late_fee)) if self.late_fee and not isinstance(self.late_fee, Decimal) else (self.late_fee or Decimal('0.00'))
+        total_amount = amount + late_fee
+        
         if paid_amount >= total_amount:
             self.status = 'paid'
-        elif paid_amount > 0:
+        elif paid_amount > Decimal('0.00'):
             self.status = 'partial'
         else:
             self.status = 'overdue'
@@ -191,12 +209,50 @@ class Payment(BaseModel):
                 data['room_no'] = self.contract_rel.room.room_number
         if self.operator:
             data['operator_name'] = self.operator.username
-        data['total_amount'] = self.get_total_amount()
+        # total_amount 是 Decimal 类型，需要转换为 float 以便 JSON 序列化
+        total_amount = self.get_total_amount()
+        data['total_amount'] = float(total_amount) if isinstance(total_amount, Decimal) else total_amount
         data['is_overdue'] = self.is_overdue()
         data['days_until_due'] = self.get_days_until_due()
         data['payment_type_name'] = self.PAYMENT_TYPES.get(self.payment_type, self.payment_type)
         data['payment_method_name'] = self.PAYMENT_METHODS.get(self.payment_method, self.payment_method)
         return data
+    
+    def get_cascade_relations(self):
+        """
+        获取需要级联处理的关系定义
+        
+        支付记录是叶子节点，没有需要级联删除的子关系
+        """
+        return {}
+    
+    def validate_delete(self):
+        """
+        验证是否可以删除支付记录
+        
+        特殊规则：
+        - 如果是待支付状态（pending），允许删除
+        - 如果是已支付状态（paid），不允许删除
+        - 如果是部分支付状态（partial），不允许删除
+        
+        Returns:
+            Tuple[bool, List[str]]: (是否可以删除, 错误消息列表)
+        """
+        # 先调用父类的基础验证
+        can_delete, errors = super().validate_delete()
+        
+        # 检查支付状态
+        if self.status == 'paid':
+            errors.append('已支付的记录无法删除')
+            can_delete = False
+        elif self.status == 'partial':
+            errors.append('部分支付的记录无法删除，请先完成退款')
+            can_delete = False
+        elif self.status == 'refunded':
+            errors.append('已退款的记录无法删除')
+            can_delete = False
+        
+        return can_delete, errors
     
     def __repr__(self):
         return f'<Payment {self.payment_no}>'

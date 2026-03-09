@@ -310,9 +310,25 @@ def get_user_audit_logs(user_id: int):
     获取指定用户的审计日志
     
     Query Parameters:
-        limit: 返回数量限制（默认 50）
+        page: 页码（可选，默认 1）
+        per_page: 每页数量（可选，默认 20，最大 100）
+        limit: 返回数量限制（可选，默认 50，最大 200，向后兼容）
     
-    Response:
+    Response (分页模式 - 使用 page 参数):
+    {
+        "success": true,
+        "data": {
+            "logs": [...],
+            "pagination": {
+                "page": 1,
+                "per_page": 20,
+                "total": 100,
+                "pages": 5
+            }
+        }
+    }
+    
+    Response (限制模式 - 仅使用 limit 参数):
     {
         "success": true,
         "data": {
@@ -321,17 +337,48 @@ def get_user_audit_logs(user_id: int):
     }
     """
     try:
-        limit = request.args.get('limit', 50, type=int)
-        limit = min(limit, 200)
+        # 检查是否使用分页模式
+        page = request.args.get('page', type=int)
         
-        logs = SensitiveDataAuditLog.get_logs_by_user(user_id, limit)
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'logs': [log.to_dict() for log in logs]
-            }
-        }), 200
+        if page is not None:
+            # 分页模式
+            page = max(page, 1)
+            per_page = request.args.get('per_page', 20, type=int)
+            per_page = min(max(per_page, 1), 100)  # 限制每页数量
+            
+            # 构建查询
+            query = db.session.query(SensitiveDataAuditLog).filter(
+                SensitiveDataAuditLog.deleted_at.is_(None),
+                SensitiveDataAuditLog.user_id == user_id
+            ).order_by(SensitiveDataAuditLog.operation_time.desc())
+            
+            pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+            
+            return jsonify({
+                'success': True,
+                'data': {
+                    'logs': [log.to_dict() for log in pagination.items],
+                    'pagination': {
+                        'page': page,
+                        'per_page': per_page,
+                        'total': pagination.total,
+                        'pages': pagination.pages
+                    }
+                }
+            }), 200
+        else:
+            # 限制模式（向后兼容）
+            limit = request.args.get('limit', 50, type=int)
+            limit = min(limit, 200)
+            
+            logs = SensitiveDataAuditLog.get_logs_by_user(user_id, limit)
+            
+            return jsonify({
+                'success': True,
+                'data': {
+                    'logs': [log.to_dict() for log in logs]
+                }
+            }), 200
         
     except Exception as e:
         current_app.logger.error(f"获取用户审计日志失败: {str(e)}")
@@ -476,7 +523,9 @@ def get_user_activity_summary(user_id: int):
     获取用户活动摘要
     
     Query Parameters:
-        days: 统计天数（默认 30）
+        start_date: 开始日期（可选，格式：YYYY-MM-DD）
+        end_date: 结束日期（可选，格式：YYYY-MM-DD）
+        days: 统计天数（可选，默认 30，向后兼容）
     
     Response:
     {
@@ -484,6 +533,8 @@ def get_user_activity_summary(user_id: int):
         "data": {
             "user_id": 1,
             "period_days": 30,
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-31",
             "operations": [...],
             "models": [...],
             "recent_activities": [...]
@@ -491,10 +542,39 @@ def get_user_activity_summary(user_id: int):
     }
     """
     try:
-        days = request.args.get('days', 30, type=int)
-        days = min(days, 365)  # 限制最大天数
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
         
-        summary = SensitiveDataAuditLog.get_user_activity_summary(user_id, days)
+        if start_date and end_date:
+            # 使用日期范围模式
+            try:
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+                
+                # 计算天数差
+                period_days = (end_dt - start_dt).days + 1
+                
+                summary = SensitiveDataAuditLog.get_user_activity_summary_by_date_range(
+                    user_id, start_dt, end_dt
+                )
+                summary['period_days'] = period_days
+                summary['start_date'] = start_date
+                summary['end_date'] = end_date
+                
+            except ValueError:
+                return jsonify({
+                    'success': False,
+                    'error': {
+                        'code': 'invalid_date_format',
+                        'message': '日期格式无效，请使用 YYYY-MM-DD 格式'
+                    }
+                }), 400
+        else:
+            # 使用天数模式（向后兼容）
+            days = request.args.get('days', 30, type=int)
+            days = min(days, 365)  # 限制最大天数
+            
+            summary = SensitiveDataAuditLog.get_user_activity_summary(user_id, days)
         
         return jsonify({
             'success': True,
@@ -521,30 +601,59 @@ def get_sensitive_access_alerts():
     检测短时间内频繁访问敏感数据的行为
     
     Query Parameters:
-        threshold: 访问次数阈值（默认 10）
-        hours: 时间窗口（小时，默认 1）
+        page: 页码（可选，默认 1）
+        per_page: 每页数量（可选，默认 20，最大 100）
+        threshold: 访问次数阈值（可选，默认 10）
+        hours: 时间窗口（可选，小时，默认 1）
     
     Response:
     {
         "success": true,
         "data": {
-            "alerts": [...]
+            "alerts": [...],
+            "pagination": {
+                "page": 1,
+                "per_page": 20,
+                "total": 50,
+                "pages": 3
+            },
+            "threshold": 10,
+            "time_window_hours": 1
         }
     }
     """
     try:
+        # 获取分页参数
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 20, type=int)
+        per_page = min(max(per_page, 1), 100)  # 限制每页数量
+        
+        # 获取预警参数
         threshold = request.args.get('threshold', 10, type=int)
         hours = request.args.get('hours', 1, type=int)
         
-        alerts = SensitiveDataAuditLog.get_sensitive_access_alert(threshold, hours)
+        # 获取所有预警数据
+        all_alerts = SensitiveDataAuditLog.get_sensitive_access_alert(threshold, hours)
+        
+        # 手动分页
+        total = len(all_alerts)
+        total_pages = (total + per_page - 1) // per_page if total > 0 else 1
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        paginated_alerts = all_alerts[start_idx:end_idx]
         
         return jsonify({
             'success': True,
             'data': {
-                'alerts': alerts,
+                'alerts': paginated_alerts,
+                'pagination': {
+                    'page': page,
+                    'per_page': per_page,
+                    'total': total,
+                    'pages': total_pages
+                },
                 'threshold': threshold,
-                'time_window_hours': hours,
-                'alert_count': len(alerts)
+                'time_window_hours': hours
             }
         }), 200
         

@@ -58,6 +58,7 @@ backups/*
 # Frontend
 node_modules/
 dist/
+release/
 .DS_Store
 
 # Testing
@@ -76,3 +77,6 @@ public/
 docs/
 tests/
 scripts/
+instance/
+/resourcedata
+/uploads

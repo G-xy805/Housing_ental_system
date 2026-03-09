@@ -450,6 +450,66 @@ class SensitiveDataAuditLog(BaseModel):
         }
     
     @classmethod
+    def get_user_activity_summary_by_date_range(cls, user_id: int, start_date: datetime, end_date: datetime):
+        """
+        获取用户活动摘要（按日期范围）
+        
+        Args:
+            user_id: 用户 ID
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            dict: 用户活动摘要
+        """
+        # 用户操作统计
+        operations = db.session.query(
+            cls.operation_type,
+            db.func.count(cls.id).label('count')
+        ).filter(
+            cls.deleted_at.is_(None),
+            cls.user_id == user_id,
+            cls.operation_time >= start_date,
+            cls.operation_time <= end_date
+        ).group_by(cls.operation_type).all()
+        
+        # 用户访问的模型统计
+        models = db.session.query(
+            cls.model_name,
+            db.func.count(cls.id).label('count')
+        ).filter(
+            cls.deleted_at.is_(None),
+            cls.user_id == user_id,
+            cls.operation_time >= start_date,
+            cls.operation_time <= end_date
+        ).group_by(cls.model_name).all()
+        
+        # 最近操作
+        recent_logs = db.session.query(cls).filter(
+            cls.deleted_at.is_(None),
+            cls.user_id == user_id,
+            cls.operation_time >= start_date,
+            cls.operation_time <= end_date
+        ).order_by(cls.operation_time.desc()).limit(10).all()
+        
+        return {
+            'user_id': user_id,
+            'operations': [
+                {
+                    'operation_type': op[0],
+                    'operation_type_name': cls.OPERATION_TYPES.get(op[0], op[0]),
+                    'count': op[1]
+                } 
+                for op in operations
+            ],
+            'models': [
+                {'model_name': m[0], 'count': m[1]} 
+                for m in models
+            ],
+            'recent_activities': [log.to_dict() for log in recent_logs]
+        }
+    
+    @classmethod
     def get_sensitive_access_alert(cls, threshold: int = 10, hours: int = 1):
         """
         获取敏感数据访问预警

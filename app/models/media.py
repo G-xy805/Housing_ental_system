@@ -99,5 +99,25 @@ class Media(BaseModel):
             data['uploader_name'] = self.uploader.username
         return data
     
+    def get_cascade_relations(self):
+        """
+        获取需要级联处理的关系定义
+        
+        媒体文件是叶子节点，没有需要级联删除的子关系
+        """
+        return {}
+    
+    def validate_delete(self):
+        """
+        验证是否可以删除媒体文件
+        
+        媒体文件可以随时删除
+        
+        Returns:
+            Tuple[bool, List[str]]: (是否可以删除, 错误消息列表)
+        """
+        # 媒体文件可以随时删除
+        return True, []
+    
     def __repr__(self):
         return f'<Media {self.file_name}>'

@@ -18,8 +18,8 @@ class PaymentSchema(BaseSchema, TimestampMixin):
     payment_no = fields.Str(dump_only=True)
     
     # 支付信息
-    amount = fields.Float(required=True)
-    paid_amount = fields.Float(allow_none=True)
+    amount = fields.Decimal(required=True, places=2, as_string=False)
+    paid_amount = fields.Decimal(allow_none=True, places=2, as_string=False)
     
     # 支付类型
     payment_type = fields.Str(required=True, validate=lambda x: x in ['rent', 'deposit', 'utility', 'other'])
@@ -37,8 +37,8 @@ class PaymentSchema(BaseSchema, TimestampMixin):
     confirmed_date = fields.DateTime(allow_none=True)
     
     # 滞纳金
-    late_fee = fields.Float(dump_only=True)
-    late_fee_rate = fields.Float(dump_only=True)
+    late_fee = fields.Decimal(dump_only=True, places=2, as_string=False)
+    late_fee_rate = fields.Decimal(dump_only=True, places=6, as_string=False)
     overdue_days = fields.Int(dump_only=True)
     
     # 状态
@@ -65,7 +65,7 @@ class PaymentSchema(BaseSchema, TimestampMixin):
     house_address = fields.Str(dump_only=True)
     room_no = fields.Str(dump_only=True)
     operator_name = fields.Str(dump_only=True)
-    total_amount = fields.Float(dump_only=True)
+    total_amount = fields.Decimal(dump_only=True, places=2, as_string=False)
     is_overdue = fields.Bool(dump_only=True)
     days_until_due = fields.Int(dump_only=True)
     payment_type_name = fields.Str(dump_only=True)
@@ -107,7 +107,7 @@ class PaymentCreateSchema(BaseSchema):
     支付创建 Schema
     """
     
-    amount = fields.Float(required=True, validate=lambda x: x > 0)
+    amount = fields.Decimal(required=True, places=2, as_string=False, validate=lambda x: x > 0)
     payment_type = fields.Str(required=True, validate=lambda x: x in ['rent', 'deposit', 'utility', 'other'])
     
     period_start = fields.Date(allow_none=True)
@@ -133,8 +133,8 @@ class PaymentUpdateSchema(BaseSchema):
     支付更新 Schema
     """
     
-    amount = fields.Float(allow_none=True, validate=lambda x: x > 0 if x else True)
-    paid_amount = fields.Float(allow_none=True, validate=lambda x: x >= 0 if x else True)
+    amount = fields.Decimal(allow_none=True, places=2, as_string=False, validate=lambda x: x > 0 if x else True)
+    paid_amount = fields.Decimal(allow_none=True, places=2, as_string=False, validate=lambda x: x >= 0 if x else True)
     
     payment_method = fields.Str(allow_none=True, validate=lambda x: x in ['cash', 'bank', 'wechat', 'alipay'])
     

@@ -1,6 +1,7 @@
 """
 房东模型
 """
+import hashlib
 from .base import db, BaseModel
 from app.utils.aes_encryption import (
     encrypt_sensitive_data, 
@@ -9,6 +10,26 @@ from app.utils.aes_encryption import (
     HybridEncryptor
 )
 from app.utils.sensitive_data_audit import SensitiveDataAuditLogger
+
+
+def calculate_id_card_hash(id_card: str) -> str:
+    """
+    计算身份证号的哈希值（用于快速查重）
+    
+    使用 SHA-256 哈希算法，确保相同身份证号生成相同的哈希值
+    这样可以在不解密的情况下快速检测重复
+    
+    Args:
+        id_card: 身份证号明文
+        
+    Returns:
+        str: 64 位十六进制哈希值
+    """
+    if not id_card:
+        return None
+    # 统一转为大写，确保 X 和 x 生成相同的哈希值
+    normalized = id_card.strip().upper()
+    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
 
 
 class Landlord(BaseModel):
@@ -33,6 +54,9 @@ class Landlord(BaseModel):
     
     # 身份证号（加密存储）
     id_card_encrypted = db.Column(db.Text, comment='身份证号（AES-256-GCM 加密存储）')
+    
+    # 身份证号哈希值（用于快速查重，无需解密）
+    id_card_hash = db.Column(db.String(64), index=True, unique=True, comment='身份证号哈希值（SHA-256，用于快速查重）')
     
     # 联系方式
     phone = db.Column(db.String(20), nullable=False, comment='联系电话')
@@ -67,6 +91,8 @@ class Landlord(BaseModel):
         """
         设置身份证号并使用 AES-256-GCM 加密存储
         
+        同时计算并存储哈希值，用于快速查重
+        
         Args:
             id_card_number: 身份证号明文
             user_id: 操作用户 ID（用于审计日志）
@@ -86,6 +112,7 @@ class Landlord(BaseModel):
             except:
                 pass
         
+        # 加密存储身份证号
         self.id_card_encrypted = encrypt_sensitive_data(
             data=id_card_number,
             field_name='id_card',
@@ -94,6 +121,9 @@ class Landlord(BaseModel):
             user_id=user_id,
             skip_audit=True
         )
+        
+        # 计算并存储哈希值（用于快速查重）
+        self.id_card_hash = calculate_id_card_hash(id_card_number)
         
         if not skip_audit:
             SensitiveDataAuditLogger.log_modify(
@@ -318,6 +348,7 @@ class Landlord(BaseModel):
         # 自动过滤敏感字段
         data.pop('id_card_encrypted', None)
         data.pop('bank_card_encrypted', None)
+        data.pop('id_card_hash', None)  # 哈希值不对外暴露
         
         if not include_details:
             # 默认响应不包含敏感信息
@@ -325,6 +356,46 @@ class Landlord(BaseModel):
             data.pop('property_cert_no', None)
         
         return data
+    
+    def get_cascade_relations(self):
+        """
+        获取需要级联处理的关系定义
+        
+        房东删除规则：
+        - 如果有活跃的房源（关联房源不为空），不允许删除
+        - 房源可以级联软删除（仅当没有活跃合同时）
+        """
+        from .house import House
+        
+        return {
+            'houses': {
+                'model': House,
+                'cascade_delete': True,
+                'validate_not_empty': False,
+                'error_message': '关联的房源'
+            }
+        }
+    
+    def validate_delete(self):
+        """
+        验证是否可以删除房东
+        
+        特殊规则：
+        - 如果有房源，不允许直接删除（需要先处理房源）
+        
+        Returns:
+            Tuple[bool, List[str]]: (是否可以删除, 错误消息列表)
+        """
+        # 先调用父类的基础验证
+        can_delete, errors = super().validate_delete()
+        
+        # 检查是否有房源
+        houses_count = self.houses.count()
+        if houses_count > 0:
+            errors.append(f'存在 {houses_count} 个关联房源，请先处理房源后再删除')
+            can_delete = False
+        
+        return can_delete, errors
     
     def __repr__(self):
         return f'<Landlord {self.name}>'

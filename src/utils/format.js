@@ -141,7 +141,8 @@ const statusMaps = {
     rented: '已租',
     maintenance: '维护中',
     partially_rented: '部分出租',
-    reserved: '已预订'
+    reserved: '已预订',
+    cancelled: '已取消'
   },
   // 房源类型
   houseType: {
@@ -150,17 +151,21 @@ const statusMaps = {
   },
   // 租客状态
   tenant: {
-    active: '活跃',
-    expired: '已过期',
+    pending: '待租',
+    active: '在租',
+    expired: '已退租',
     blacklisted: '黑名单'
   },
   // 合同状态
   contract: {
     draft: '草稿',
-    active: '进行中',
+    pending: '待签约',
+    active: '履行中',
     expired: '已到期',
     terminated: '已终止',
-    renewed: '已续签'
+    breached: '已违约',
+    renewed: '已续签',
+    cancelled: '已取消'
   },
   // 支付状态
   payment: {
@@ -168,7 +173,8 @@ const statusMaps = {
     paid: '已支付',
     overdue: '逾期',
     partial: '部分支付',
-    refunded: '已退款'
+    refunded: '已退款',
+    cancelled: '已取消'
   },
   // 支付方式
   paymentMethod: {
@@ -238,12 +244,17 @@ export function getStatusConfig(type, status) {
     partially_rented: 'warning',
     reserved: 'primary',
     // 租客状态颜色
+    pending: 'warning',
     active: 'success',
-    expired: 'warning',
+    expired: 'info',
     blacklisted: 'danger',
     // 合同状态颜色
     draft: 'info',
+    pending: 'warning',
+    active: 'success',
+    expired: 'info',
     terminated: 'danger',
+    breached: 'danger',
     renewed: 'primary',
     // 支付状态颜色
     pending: 'warning',

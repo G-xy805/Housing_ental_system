@@ -2,49 +2,128 @@
   <div class="room-list-container">
     <div class="room-header">
       <h3>房间列表</h3>
-      <el-button type="primary" @click="handleAddRoom" v-if="showAddButton">
+      <el-button type="primary" @click="handleAddRoom" v-if="showAddButton && !isNewHouse">
         <el-icon><Plus /></el-icon>
         添加房间
       </el-button>
     </div>
+    
+    <el-alert
+      v-if="isNewHouse"
+      title="请先保存房源后再添加房间"
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 15px;"
+    >
+      <template #default>
+        <span>您需要先保存房源基本信息，然后才能添加房间。</span>
+      </template>
+    </el-alert>
 
     <el-table :data="rooms" v-loading="loading" border stripe class="room-table">
-      <el-table-column prop="room_number" label="房间号" width="100" />
-      <el-table-column prop="room_name" label="房间名称" min-width="120" />
-      <el-table-column label="户型" width="100">
+      <el-table-column prop="room_number" label="房间号" width="120">
         <template #default="{ row }">
-          {{ row.room_count }}室{{ row.hall_count }}厅{{ row.bathroom_count }}卫
+          {{ row.room_number }}
         </template>
       </el-table-column>
-      <el-table-column prop="area" label="面积 (㎡)" width="90" />
-      <el-table-column prop="floor" label="楼层" width="80" />
-      <el-table-column prop="orientation" label="朝向" width="80">
+      <el-table-column prop="room_name" label="房间名称" width="150">
         <template #default="{ row }">
-          {{ getOrientationText(row.orientation) }}
+          {{ row.room_name || '暂无' }}
         </template>
       </el-table-column>
-      <el-table-column prop="rent_price" label="租金 (元/月)" width="110" />
-      <el-table-column prop="status" label="状态" width="90">
-        <template #default="{ row }">
-          <el-tag :type="getStatusType(row.status)" size="small">
-            {{ getStatusText(row.status) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="is_master" label="主卧" width="70">
-        <template #default="{ row }">
-          <el-tag :type="row.is_master ? 'success' : 'info'" size="small">
-            {{ row.is_master ? '是' : '否' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
+      
+      <!-- 简化模式只显示基本信息 -->
+      <template v-if="simpleMode">
+        <el-table-column prop="rent_price" label="租金 (元/月)" width="120">
+          <template #default="{ row }">
+            {{ row.rent_price }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="getStatusType(row.status)" size="small">
+              {{ getStatusText(row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+      </template>
+      
+      <!-- 完整模式显示所有信息 -->
+      <template v-else>
+        <el-table-column prop="area" label="面积 (㎡)" width="100">
+          <template #default="{ row }">
+            {{ row.area }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="floor" label="楼层" width="90">
+          <template #default="{ row }">
+            {{ row.floor }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="orientation" label="朝向" width="100">
+          <template #default="{ row }">
+            {{ getOrientationText(row.orientation) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="rent_price" label="租金 (元/月)" width="120">
+          <template #default="{ row }">
+            {{ row.rent_price }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="deposit" label="押金 (元)" width="100">
+          <template #default="{ row }">
+            {{ row.deposit }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="payment_method" label="付款方式" width="100">
+          <template #default="{ row }">
+            {{ getPaymentMethodText(row.payment_method) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="getStatusType(row.status)" size="small">
+              {{ getStatusText(row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="facilities" label="配套设施" min-width="250">
+          <template #default="{ row }">
+            <div v-if="row.facilities && Object.keys(row.facilities).length > 0" class="facilities-tags" style="display: flex; flex-wrap: wrap; gap: 4px;">
+              <template v-for="(value, key) in row.facilities" :key="key">
+                <el-tag
+                  v-if="value"
+                  size="small"
+                  type="info"
+                  style="margin: 2px"
+                >
+                  {{ getFacilityText(key) }}
+                </el-tag>
+              </template>
+            </div>
+            <span v-else style="color: #909399">暂无</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="is_master" label="主卧" width="80">
+          <template #default="{ row }">
+            <el-tag :type="row.is_master ? 'success' : 'info'" size="small">
+              {{ row.is_master ? '是' : '否' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+      </template>
+      
+      <el-table-column label="操作" :width="simpleMode ? '100' : '220'" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="handleViewRoom(row)" v-if="showViewButton">
             查看
           </el-button>
           <el-button link type="primary" @click="handleEditRoom(row)" v-if="showEditButton">
             编辑
+          </el-button>
+          <el-button link type="success" @click="handleCreateContract(row)" v-if="showCreateContractButton && row.status === 'available'">
+            创建合同
           </el-button>
           <el-button link type="danger" @click="handleDeleteRoom(row)" v-if="showDeleteButton">
             删除
@@ -53,98 +132,29 @@
       </el-table-column>
     </el-table>
 
-    <!-- 添加/编辑房间对话框 -->
-    <el-dialog
+    <!-- 房间表单对话框 -->
+    <RoomFormDialog
       v-model="dialogVisible"
-      :title="dialogTitle"
-      width="600px"
-      :close-on-click-modal="false"
-    >
-      <el-form
-        ref="roomFormRef"
-        :model="roomFormData"
-        :rules="roomFormRules"
-        label-width="100px"
-      >
-        <el-form-item label="房间号" prop="room_number">
-          <el-input v-model="roomFormData.room_number" placeholder="如：101、A 间" />
-        </el-form-item>
-        <el-form-item label="房间名称" prop="room_name">
-          <el-input v-model="roomFormData.room_name" placeholder="如：主卧带卫、次卧 A" />
-        </el-form-item>
-        <el-form-item label="租金 (元/月)" prop="rent_price">
-          <el-input-number
-            v-model="roomFormData.rent_price"
-            :min="0"
-            :precision="2"
-            :step="100"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="面积 (㎡)" prop="area">
-          <el-input-number
-            v-model="roomFormData.area"
-            :min="0"
-            :precision="2"
-            :step="1"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="楼层" prop="floor">
-          <el-input-number
-            v-model="roomFormData.floor"
-            :min="1"
-            :step="1"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="朝向" prop="orientation">
-          <el-select v-model="roomFormData.orientation" placeholder="请选择朝向" style="width: 100%">
-            <el-option label="南" value="south" />
-            <el-option label="北" value="north" />
-            <el-option label="东" value="east" />
-            <el-option label="西" value="west" />
-            <el-option label="东南" value="southeast" />
-            <el-option label="西南" value="southwest" />
-            <el-option label="东北" value="northeast" />
-            <el-option label="西北" value="northwest" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="房间状态" prop="status">
-          <el-select v-model="roomFormData.status" placeholder="请选择状态" style="width: 100%">
-            <el-option label="可租" value="available" />
-            <el-option label="已租" value="rented" />
-            <el-option label="维修中" value="maintenance" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="是否主卧" prop="is_master">
-          <el-switch v-model="roomFormData.is_master" />
-        </el-form-item>
-        <el-form-item label="房间描述" prop="description">
-          <el-input
-            v-model="roomFormData.description"
-            type="textarea"
-            :rows="3"
-            placeholder="请输入房间描述"
-            maxlength="500"
-            show-word-limit
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleConfirmRoom" :loading="submitLoading">
-          确定
-        </el-button>
-      </template>
-    </el-dialog>
+      :room-data="currentRoom"
+      :house-id="houseId"
+      @success="handleDialogSuccess"
+    />
+    
+    <!-- 房间详情对话框 -->
+    <RoomDetailDialog
+      v-model="detailDialogVisible"
+      :room="currentRoom"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
+import RoomFormDialog from './RoomFormDialog.vue'
+import RoomDetailDialog from './RoomDetailDialog.vue'
+import request from '@/api/request'
 
 const props = defineProps({
   modelValue: {
@@ -170,10 +180,26 @@ const props = defineProps({
   showDeleteButton: {
     type: Boolean,
     default: true
+  },
+  showCreateContractButton: {
+    type: Boolean,
+    default: false
+  },
+  houseId: {
+    type: [String, Number],
+    required: true
+  },
+  simpleMode: {
+    type: Boolean,
+    default: false
+  },
+  isNewHouse: {
+    type: Boolean,
+    default: false
   }
 })
 
-const emit = defineEmits(['update:modelValue', 'add', 'edit', 'delete', 'view'])
+const emit = defineEmits(['update:modelValue', 'add', 'edit', 'delete', 'view', 'createContract'])
 
 // 房间列表
 const rooms = ref([...props.modelValue])
@@ -184,55 +210,10 @@ watch(() => props.modelValue, (newVal) => {
 
 // 对话框
 const dialogVisible = ref(false)
-const dialogTitle = ref('添加房间')
-const submitLoading = ref(false)
-
-// 房间表单
-const roomFormRef = ref(null)
-const defaultRoomData = {
-  room_number: '',
-  room_name: '',
-  rent_price: 0,
-  area: 0,
-  floor: 1,
-  orientation: 'south',
-  status: 'available',
-  is_master: false,
-  description: '',
-  room_count: 1,
-  hall_count: 0,
-  bathroom_count: 1
-}
-
-const roomFormData = reactive({ ...defaultRoomData })
+const detailDialogVisible = ref(false)
 
 // 当前编辑的房间
 const currentRoom = ref(null)
-
-// 表单验证规则
-const roomFormRules = {
-  room_number: [
-    { required: true, message: '请输入房间号', trigger: 'blur' }
-  ],
-  room_name: [
-    { required: true, message: '请输入房间名称', trigger: 'blur' }
-  ],
-  rent_price: [
-    { required: true, message: '请输入租金', trigger: 'blur' }
-  ],
-  area: [
-    { required: true, message: '请输入面积', trigger: 'blur' }
-  ],
-  floor: [
-    { required: true, message: '请输入楼层', trigger: 'blur' }
-  ],
-  orientation: [
-    { required: true, message: '请选择朝向', trigger: 'change' }
-  ],
-  status: [
-    { required: true, message: '请选择状态', trigger: 'change' }
-  ]
-}
 
 // 获取状态类型
 const getStatusType = (status) => {
@@ -269,91 +250,370 @@ const getOrientationText = (orientation) => {
   return texts[orientation] || orientation
 }
 
+// 获取付款方式文本
+const getPaymentMethodText = (payment_method) => {
+  const texts = {
+    press1_pay3: '押一付三',
+    press1_pay1: '押一付一',
+    press2_pay3: '押二付三',
+    negotiable: '面议'
+  }
+  return texts[payment_method] || payment_method
+}
+
+// 获取房间配套设施文本
+const getFacilityText = (facility) => {
+  const texts = {
+    bed: '床',
+    wardrobe: '衣柜',
+    desk: '书桌',
+    chair: '椅子',
+    air_conditioner: '空调',
+    heater: '暖气',
+    private_bathroom: '独立卫生间',
+    balcony: '阳台',
+    tv: '电视',
+    refrigerator: '小冰箱',
+    microwave: '微波炉',
+    water_dispenser: '饮水机'
+  }
+  return texts[facility] || facility
+}
+
 // 添加房间
 const handleAddRoom = () => {
-  dialogTitle.value = '添加房间'
   currentRoom.value = null
-  Object.assign(roomFormData, defaultRoomData)
   dialogVisible.value = true
 }
 
 // 编辑房间
 const handleEditRoom = (row) => {
-  dialogTitle.value = '编辑房间'
-  currentRoom.value = { ...row }
-  Object.assign(roomFormData, row)
+  // 深拷贝 facilities 对象，避免引用问题
+  currentRoom.value = {
+    ...row,
+    facilities: row.facilities ? JSON.parse(JSON.stringify(row.facilities)) : {}
+  }
   dialogVisible.value = true
 }
 
-// 查看房间
+// 查看房间详情
 const handleViewRoom = (row) => {
-  emit('view', row)
+  currentRoom.value = { ...row }
+  detailDialogVisible.value = true
+}
+
+// 创建合同
+const handleCreateContract = (row) => {
+  emit('createContract', row)
 }
 
 // 删除房间
-const handleDeleteRoom = (row) => {
-  ElMessageBox.confirm('确定要删除该房间吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(() => {
-    emit('delete', row)
-    ElMessage.success('删除成功')
-  }).catch(() => {})
-}
-
-// 确认添加/编辑
-const handleConfirmRoom = async () => {
+const handleDeleteRoom = async (row) => {
   try {
-    await roomFormRef.value.validate()
-    submitLoading.value = true
+    await ElMessageBox.confirm(
+      `<div>
+        <p>确定要删除以下房间吗？</p>
+        <div style="margin-top: 10px; padding: 10px; background-color: #f5f7fa; border-radius: 4px;">
+          <p><strong>房间号：</strong>${row.room_number}</p>
+          <p><strong>房间名称：</strong>${row.room_name}</p>
+          <p><strong>租金：</strong>${row.rent_price} 元/月</p>
+          <p><strong>面积：</strong>${row.area} ㎡</p>
+        </div>
+        <p style="margin-top: 10px; color: #f56c6c;">删除后数据将不可恢复，请谨慎操作。</p>
+      </div>`,
+      '确认删除',
+      {
+        confirmButtonText: '确定删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+        dangerouslyUseHTMLString: true,
+        center: true,
+        confirmButtonClass: 'el-button--danger',
+        cancelButtonClass: 'el-button--info'
+      }
+    )
+
+    // 调用 API 删除房间
+    await request.delete(`/houses/rooms/${row.id}`)
     
-    const data = { ...roomFormData }
-    
-    if (currentRoom.value) {
-      // 编辑
-      emit('edit', { ...currentRoom.value, ...data })
-      ElMessage.success('编辑成功')
-    } else {
-      // 添加
-      emit('add', data)
-      ElMessage.success('添加成功')
-    }
-    
-    dialogVisible.value = false
+    ElMessage.success('删除成功')
+    emit('delete', row)
   } catch (error) {
-    console.error('表单验证失败:', error)
-  } finally {
-    submitLoading.value = false
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      const errorMessage = error.response?.data?.message || '删除失败，请重试'
+      ElMessage.error(errorMessage)
+    }
+    ElMessage.info('已取消删除操作')
   }
 }
 
-// 暴露方法
-defineExpose({
-  resetForm: () => {
-    Object.assign(roomFormData, defaultRoomData)
-    roomFormRef.value?.resetFields()
+// 处理对话框成功事件
+const handleDialogSuccess = (result) => {
+  if (currentRoom.value && currentRoom.value.id) {
+    emit('edit', result)
+  } else {
+    emit('add', result)
   }
-})
+}
 </script>
 
 <style lang="scss" scoped>
+// 设计变量
+$primary-color: #14b8a6; // Teal
+$primary-light: #5eead4;
+$primary-dark: #0d9488;
+$accent-color: #06b6d4; // Cyan
+$border-radius: 12px;
+$border-radius-lg: 16px;
+$transition-fast: 150ms;
+$transition-normal: 250ms;
+$transition-slow: 300ms;
+
 .room-list-container {
+  width: 100%;
+  overflow-x: visible;
+  display: block;
+
   .room-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 15px;
+    margin-bottom: 20px;
+    padding-right: 20px;
 
     h3 {
       margin: 0;
-      color: #333;
-      font-size: 16px;
+      color: #1f2937;
+      font-size: 18px;
+      font-weight: 600;
+      position: relative;
+      padding-left: 12px;
+
+      &::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 4px;
+        height: 20px;
+        background: linear-gradient(180deg, $primary-color 0%, $accent-color 100%);
+        border-radius: 2px;
+      }
+    }
+
+    :deep(.el-button) {
+      border-radius: $border-radius;
+      font-weight: 500;
+      transition: all $transition-normal ease;
+      padding: 10px 20px;
+      height: auto;
+
+      &.el-button--primary {
+        background: linear-gradient(135deg, $primary-color 0%, $accent-color 100%);
+        border: none;
+        box-shadow: 0 2px 8px rgba(20, 184, 166, 0.3);
+
+        &:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 16px rgba(20, 184, 166, 0.4);
+        }
+
+        &:active {
+          transform: translateY(0);
+        }
+
+        .el-icon {
+          margin-right: 6px;
+          transition: transform $transition-fast ease;
+        }
+
+        &:hover .el-icon {
+          transform: rotate(90deg);
+        }
+      }
+    }
+  }
+
+  // 提示框样式
+  :deep(.el-alert) {
+    border-radius: $border-radius;
+    border: 1px solid rgba(20, 184, 166, 0.2);
+    background: rgba(20, 184, 166, 0.06);
+    margin-bottom: 20px;
+
+    .el-alert__title {
+      color: $primary-dark;
+      font-size: 14px;
+    }
+
+    .el-alert__icon {
+      color: $primary-color;
     }
   }
 
   .room-table {
-    width: 100%;
+    width: auto;
+    min-width: 100%;
+    border-radius: $border-radius;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03);
+
+    :deep(.el-table__header-wrapper) {
+      th {
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        font-weight: 600;
+        color: #374151;
+        font-size: 14px;
+        border-bottom: 2px solid $primary-light;
+      }
+    }
+
+    :deep(.el-table__body-wrapper) {
+      overflow-x: auto;
+    }
+
+    :deep(.el-table__row) {
+      transition: all $transition-normal ease;
+
+      &:hover {
+        background: rgba(20, 184, 166, 0.04) !important;
+
+        td {
+          border-bottom-color: rgba(20, 184, 166, 0.15);
+        }
+      }
+
+      td {
+        transition: all $transition-fast ease;
+      }
+    }
+
+    :deep(.el-table__row:first-child) {
+      background-color: #f9fafb;
+
+      &:hover {
+        background-color: rgba(20, 184, 166, 0.04);
+      }
+    }
+
+    :deep(.el-table__fixed-right) {
+      height: 100% !important;
+      box-shadow: -2px 0 8px rgba(0, 0, 0, 0.05);
+    }
+
+    // 状态标签样式
+    :deep(.el-tag) {
+      border-radius: 8px;
+      font-weight: 500;
+      padding: 4px 12px;
+      border: none;
+
+      &.el-tag--success {
+        background: rgba(34, 197, 94, 0.12);
+        color: #16a34a;
+      }
+
+      &.el-tag--info {
+        background: rgba(100, 116, 139, 0.12);
+        color: #475569;
+      }
+
+      &.el-tag--warning {
+        background: rgba(245, 158, 11, 0.12);
+        color: #d97706;
+      }
+    }
+
+    // 配套设施标签
+    .facilities-tags {
+      :deep(.el-tag) {
+        margin: 2px;
+        border-radius: 6px;
+        font-size: 12px;
+        background: rgba(20, 184, 166, 0.08);
+        color: $primary-dark;
+        border: 1px solid rgba(20, 184, 166, 0.2);
+      }
+    }
+
+    // 操作按钮样式
+    :deep(.el-button--link) {
+      font-weight: 500;
+      padding: 4px 8px;
+      border-radius: 6px;
+      transition: all $transition-fast ease;
+
+      &:hover {
+        background: rgba(20, 184, 166, 0.08);
+      }
+
+      &.el-button--primary {
+        color: $primary-color;
+
+        &:hover {
+          color: $primary-dark;
+        }
+      }
+
+      &.el-button--success {
+        color: #22c55e;
+
+        &:hover {
+          color: #16a34a;
+          background: rgba(34, 197, 94, 0.08);
+        }
+      }
+
+      &.el-button--danger {
+        color: #ef4444;
+
+        &:hover {
+          color: #dc2626;
+          background: rgba(239, 68, 68, 0.08);
+        }
+      }
+    }
+  }
+
+  // 空状态样式
+  :deep(.el-table__empty-block) {
+    padding: 60px 20px;
+
+    .el-table__empty-text {
+      color: #9ca3af;
+    }
+  }
+
+  .户型-inputs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+
+    span {
+      font-size: 12px;
+      color: #6b7280;
+      font-weight: 500;
+    }
+  }
+}
+
+// 响应式调整
+@media screen and (max-width: 1400px) {
+  .room-list-container {
+    .room-table {
+      min-width: 1000px;
+    }
+  }
+}
+
+@media screen and (max-width: 1200px) {
+  .room-list-container {
+    .room-table {
+      min-width: 800px;
+    }
   }
 }
 </style>

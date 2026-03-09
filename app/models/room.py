@@ -21,17 +21,21 @@ class Room(BaseModel):
     room_number = db.Column(db.String(20), nullable=False, comment='房间编号')
     
     # 房间信息
-    name = db.Column(db.String(50), comment='房间名称（如：主卧、次卧 A）')
+    room_name = db.Column(db.String(50), comment='房间名称（如：主卧、次卧 A）')
     description = db.Column(db.Text, comment='房间描述')
     
     # 房间属性
     area = db.Column(db.Float, comment='房间面积（平方米）')
     floor = db.Column(db.String(20), comment='楼层')
-    direction = db.Column(db.String(20), comment='朝向（南/北/东/西）')
+    orientation = db.Column(db.String(20), comment='朝向（南/北/东/西）')
     
     # 租金信息
-    rent_price = db.Column(db.Float, nullable=False, comment='房间租金（元/月）')
-    deposit = db.Column(db.Float, default=0, comment='押金（元）')
+    rent_price = db.Column(db.Numeric(10, 2), nullable=False, comment='房间租金（元/月）')
+    deposit = db.Column(db.Numeric(10, 2), default=0, comment='押金（元）')
+    payment_method = db.Column(db.String(50), default='press1_pay3', comment='付款方式')
+    
+    # 房间特性
+    is_master = db.Column(db.Boolean, default=False, comment='是否为主卧')
     
     # 配套设施（JSON 格式）
     facilities = db.Column(db.JSON, comment='房间配套设施，如：{"bed": true, "desk": true, "ac": true}')
@@ -61,6 +65,49 @@ class Room(BaseModel):
             data['house_title'] = self.house.title
             data['house_address'] = self.house.address
         return data
+    
+    def get_cascade_relations(self):
+        """
+        获取需要级联处理的关系定义
+        
+        房间删除规则：
+        - 如果有活跃合同（active/draft），不允许删除
+        """
+        from .contract import Contract
+        
+        return {
+            'contracts': {
+                'model': Contract,
+                'cascade_delete': True,
+                'validate_not_empty': False,
+                'error_message': '关联的合同'
+            }
+        }
+    
+    def validate_delete(self):
+        """
+        验证是否可以删除房间
+        
+        特殊规则：
+        - 如果有活跃合同（active/draft），不允许删除
+        
+        Returns:
+            Tuple[bool, List[str]]: (是否可以删除, 错误消息列表)
+        """
+        # 先调用父类的基础验证
+        can_delete, errors = super().validate_delete()
+        
+        # 检查是否有活跃合同
+        from .contract import Contract
+        active_contracts = self.contracts.filter(
+            Contract.status.in_(['active', 'draft'])
+        ).count()
+        
+        if active_contracts > 0:
+            errors.append(f'存在 {active_contracts} 个活跃合同，无法删除')
+            can_delete = False
+        
+        return can_delete, errors
     
     def __repr__(self):
         return f'<Room {self.house_id}-{self.room_number}>'

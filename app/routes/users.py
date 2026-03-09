@@ -198,6 +198,104 @@ def get_users():
         return APIResponse.server_error("获取用户列表失败")
 
 
+@users_bp.route('', methods=['POST'])
+@login_required
+@admin_required
+def create_user():
+    """
+    创建用户
+    
+    Request Body:
+        {
+            "username": "用户名（必填）",
+            "password": "密码（必填）",
+            "name": "姓名（必填）",
+            "phone": "手机号（可选）",
+            "email": "邮箱（可选）",
+            "role": "角色（可选，默认 staff）",
+            "position": "职位（可选）",
+            "id_card": "身份证号（可选）"
+        }
+        
+    Response:
+        {
+            "success": true,
+            "data": {...用户信息...},
+            "message": "用户创建成功"
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return APIResponse.bad_request("请求数据不能为空")
+        
+        # 验证必填字段
+        username = data.get('username')
+        password = data.get('password')
+        name = data.get('name')
+        
+        if not username:
+            return APIResponse.bad_request("用户名不能为空")
+        
+        if not password:
+            return APIResponse.bad_request("密码不能为空")
+        
+        if not name:
+            return APIResponse.bad_request("姓名不能为空")
+        
+        # 检查用户名是否已存在
+        if User.query.filter_by(username=username).first():
+            return APIResponse.bad_request("用户名已存在")
+        
+        # 检查手机号是否已存在
+        phone = data.get('phone')
+        if phone and check_phone_duplicate(phone):
+            return APIResponse.bad_request("手机号已存在")
+        
+        # 检查邮箱是否已存在
+        email = data.get('email')
+        if email and check_email_duplicate(email):
+            return APIResponse.bad_request("邮箱已存在")
+        
+        # 创建用户
+        user = User(
+            username=username,
+            name=name,
+            phone=phone,
+            email=email,
+            role=data.get('role', 'staff'),
+            position=data.get('position'),
+            status='active',
+            created_by=g.user_id
+        )
+        
+        # 设置密码（加密存储）
+        user.set_password(password)
+        
+        # 设置身份证号（如果有）
+        id_card = data.get('id_card')
+        if id_card:
+            user.set_id_card(id_card)
+        
+        db.session.add(user)
+        db.session.commit()
+        db.session.refresh(user)
+        
+        # 失效用户缓存
+        CacheEventEmitter.emit('user_created')
+        
+        result = format_user_response(user)
+        current_app.logger.info(f"管理员 {g.username} 创建了用户 {user.id}: {username}")
+        
+        return APIResponse.success(result, "用户创建成功", status_code=201)
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"创建用户失败：{str(e)}")
+        return APIResponse.server_error("创建用户失败")
+
+
 @users_bp.route('/<int:user_id>', methods=['GET'])
 @login_required
 @admin_required

@@ -4,7 +4,7 @@
 提供租客模型的序列化和验证
 """
 from typing import Optional
-from marshmallow import fields, validates, validates_schema, ValidationError
+from marshmallow import fields, validates, validates_schema, ValidationError, validate
 from .base import BaseSchema, TimestampMixin
 
 
@@ -40,7 +40,7 @@ class TenantSchema(BaseSchema, TimestampMixin):
     occupation = fields.Str(allow_none=True)
     
     # 状态
-    status = fields.Str(validate=lambda x: x in ['active', 'expired', 'blacklisted'])
+    status = fields.Str(validate=validate.OneOf(['pending', 'active', 'expired', 'blacklisted']))
     
     # 备注
     remark = fields.Str(allow_none=True)
@@ -77,8 +77,8 @@ class TenantSchema(BaseSchema, TimestampMixin):
     @validates('status')
     def validate_status(self, value: str):
         """验证状态"""
-        if value not in ['active', 'expired', 'blacklisted']:
-            raise ValidationError('状态必须是 active、expired 或 blacklisted')
+        if value not in ['pending', 'active', 'expired', 'blacklisted']:
+            raise ValidationError('状态必须是 pending、active、expired 或 blacklisted')
 
 
 class TenantCreateSchema(BaseSchema):
@@ -100,7 +100,7 @@ class TenantCreateSchema(BaseSchema):
     company = fields.Str(allow_none=True)
     occupation = fields.Str(allow_none=True)
     
-    status = fields.Str(validate=lambda x: x in ['active', 'expired', 'blacklisted'])
+    status = fields.Str(validate=validate.OneOf(['pending', 'active', 'expired', 'blacklisted']))
     remark = fields.Str(allow_none=True)
     photo = fields.Str(allow_none=True)
     
@@ -134,7 +134,7 @@ class TenantUpdateSchema(BaseSchema):
     company = fields.Str(allow_none=True)
     occupation = fields.Str(allow_none=True)
     
-    status = fields.Str(validate=lambda x: x in ['active', 'expired', 'blacklisted'])
+    status = fields.Str(validate=validate.OneOf(['pending', 'active', 'expired', 'blacklisted']))
     remark = fields.Str(allow_none=True)
     photo = fields.Str(allow_none=True)
     

@@ -110,15 +110,104 @@ const statusText = computed(() => getStatusConfig.value.text)
 </script>
 
 <style lang="scss" scoped>
+@import '@/styles/variables.scss';
+
 .status-tag {
-  font-weight: 500;
-  
-  &--house,
-  &--contract,
-  &--payment,
+  font-weight: $font-weight-medium;
+  border-radius: $radius-lg;
+  padding: 4px 12px;
+  transition: all $transition-normal;
+  cursor: default;
+  letter-spacing: 0.02em;
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: $shadow-sm;
+  }
+
+  // 房源状态
+  &--house {
+    min-width: 68px;
+    text-align: center;
+  }
+
+  // 合同状态
+  &--contract {
+    min-width: 68px;
+    text-align: center;
+  }
+
+  // 支付状态
+  &--payment {
+    min-width: 72px;
+    text-align: center;
+  }
+
+  // 用户状态
   &--user {
     min-width: 60px;
     text-align: center;
+  }
+
+  // 成功状态样式增强
+  :deep(.el-tag--success) {
+    background-color: $success-bg;
+    border-color: $success-lighter;
+    color: $success-dark;
+
+    &:hover {
+      background-color: lighten($success-bg, 2%);
+      border-color: $success-light;
+    }
+  }
+
+  // 警告状态样式增强
+  :deep(.el-tag--warning) {
+    background-color: $warning-bg;
+    border-color: $warning-lighter;
+    color: $warning-dark;
+
+    &:hover {
+      background-color: lighten($warning-bg, 2%);
+      border-color: $warning-light;
+    }
+  }
+
+  // 危险状态样式增强
+  :deep(.el-tag--danger) {
+    background-color: $danger-bg;
+    border-color: $danger-lighter;
+    color: $danger-dark;
+
+    &:hover {
+      background-color: lighten($danger-bg, 2%);
+      border-color: $danger-light;
+    }
+  }
+
+  // 信息状态样式增强
+  :deep(.el-tag--info) {
+    background-color: $info-bg;
+    border-color: $info-lighter;
+    color: $info-dark;
+
+    &:hover {
+      background-color: lighten($info-bg, 2%);
+      border-color: $info-light;
+    }
+  }
+
+  // 不同尺寸样式
+  :deep(.el-tag--large) {
+    padding: 6px 16px;
+    font-size: $font-size-base;
+    border-radius: $radius-xl;
+  }
+
+  :deep(.el-tag--small) {
+    padding: 2px 8px;
+    font-size: $font-size-xs;
+    border-radius: $radius-md;
   }
 }
 </style>

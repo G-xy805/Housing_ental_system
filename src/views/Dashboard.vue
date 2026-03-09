@@ -991,14 +991,112 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
-  houseStatusChart?.dispose()
-  incomeTrendChart?.dispose()
-  tenantTypeChart?.dispose()
-  contractStatusChart?.dispose()
+
+  // 先调用 clear() 清空图表,再调用 dispose() 销毁实例,防止内存泄漏
+  if (houseStatusChart) {
+    houseStatusChart.clear()
+    houseStatusChart.dispose()
+    houseStatusChart = null
+  }
+
+  if (incomeTrendChart) {
+    incomeTrendChart.clear()
+    incomeTrendChart.dispose()
+    incomeTrendChart = null
+  }
+
+  if (tenantTypeChart) {
+    tenantTypeChart.clear()
+    tenantTypeChart.dispose()
+    tenantTypeChart = null
+  }
+
+  if (contractStatusChart) {
+    contractStatusChart.clear()
+    contractStatusChart.dispose()
+    contractStatusChart = null
+  }
 })
 </script>
 
 <style lang="scss" scoped>
+// ============================================
+// 动画关键帧定义
+// ============================================
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes iconPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+@keyframes iconRotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(15deg);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes countUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ripple {
+  0% {
+    transform: scale(0);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(2.5);
+    opacity: 0;
+  }
+}
+
+// ============================================
+// 页面基础样式
+// ============================================
 .dashboard-page {
   padding: 24px;
   background: var(--bg-secondary);
@@ -1048,6 +1146,7 @@ onBeforeUnmount(() => {
       
       .el-button {
         border-radius: 0;
+        transition: all 0.2s ease;
         
         &:first-child {
           border-radius: 8px 0 0 8px;
@@ -1056,11 +1155,23 @@ onBeforeUnmount(() => {
         &:last-child {
           border-radius: 0 8px 8px 0;
         }
+        
+        &:hover {
+          transform: translateY(-1px);
+          filter: brightness(1.05);
+        }
+        
+        &:active {
+          transform: translateY(0);
+        }
       }
     }
   }
 }
 
+// ============================================
+// SubTask 5.1: 统计卡片优化
+// ============================================
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1080,12 +1191,64 @@ onBeforeUnmount(() => {
   background: white;
   border-radius: 16px;
   padding: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-  transition: all 0.3s ease;
+  box-shadow: 
+    0 1px 3px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.02);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+  animation: fadeInUp 0.5s ease-out backwards;
   
+  // 交错入场动画
+  @for $i from 1 through 4 {
+    &:nth-child(#{$i}) {
+      animation-delay: #{$i * 0.08}s;
+    }
+  }
+  
+  // 悬停上浮效果
   &:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
+    transform: translateY(-6px);
+    box-shadow: 
+      0 12px 28px rgba(0, 0, 0, 0.08),
+      0 8px 16px rgba(0, 0, 0, 0.04);
+    
+    .stat-icon-wrapper {
+      animation: iconPulse 0.6s ease-in-out;
+      
+      .stat-icon {
+        animation: iconRotate 0.3s ease-out;
+      }
+    }
+    
+    .stat-value {
+      color: #0F766E;
+    }
+    
+    // 底部渐变装饰线
+    &::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #0F766E, #14B8A6, #06B6D4);
+      opacity: 1;
+    }
+  }
+  
+  // 底部装饰线初始状态
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #0F766E, #14B8A6, #06B6D4);
+    opacity: 0;
+    transition: opacity 0.25s ease;
   }
   
   .stat-card-content {
@@ -1115,6 +1278,9 @@ onBeforeUnmount(() => {
       font-weight: 700;
       color: var(--text-primary);
       line-height: 1;
+      transition: color 0.25s ease;
+      animation: countUp 0.6s ease-out backwards;
+      animation-delay: 0.3s;
     }
     
     .stat-change {
@@ -1125,10 +1291,15 @@ onBeforeUnmount(() => {
       font-weight: 500;
       padding: 4px 8px;
       border-radius: 6px;
+      transition: all 0.2s ease;
       
       &.positive {
         color: #059669;
         background: rgba(5, 150, 105, 0.1);
+        
+        .change-icon {
+          animation: iconPulse 2s ease-in-out infinite;
+        }
       }
       
       &.negative {
@@ -1150,12 +1321,30 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    box-shadow: 
+      0 4px 12px rgba(0, 0, 0, 0.15),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    transition: transform 0.25s ease;
+    position: relative;
+    
+    // 光泽效果
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 50%;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, transparent 100%);
+      border-radius: 14px 14px 0 0;
+      pointer-events: none;
+    }
     
     .stat-icon {
       width: 28px;
       height: 28px;
       color: white;
+      transition: transform 0.25s ease;
     }
   }
   
@@ -1179,6 +1368,9 @@ onBeforeUnmount(() => {
   }
 }
 
+// ============================================
+// Section Header
+// ============================================
 .section-header {
   margin-bottom: 16px;
   
@@ -1187,9 +1379,27 @@ onBeforeUnmount(() => {
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;
+    position: relative;
+    padding-left: 12px;
+    
+    // 左侧装饰条
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 4px;
+      height: 18px;
+      background: linear-gradient(180deg, #0F766E, #14B8A6);
+      border-radius: 2px;
+    }
   }
 }
 
+// ============================================
+// SubTask 5.2: 图表卡片优化
+// ============================================
 .charts-section {
   margin-bottom: 24px;
   
@@ -1203,11 +1413,41 @@ onBeforeUnmount(() => {
   border-radius: 16px;
   padding: 24px;
   margin-bottom: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-  transition: all 0.3s ease;
+  box-shadow: 
+    0 1px 3px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.02);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+  animation: fadeInUp 0.5s ease-out backwards;
+  animation-delay: 0.2s;
+  
+  // 顶部渐变装饰
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(15, 118, 110, 0.3), transparent);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+  }
   
   &:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    box-shadow: 
+      0 8px 24px rgba(0, 0, 0, 0.06),
+      0 4px 12px rgba(0, 0, 0, 0.04);
+    transform: translateY(-2px);
+    
+    &::before {
+      opacity: 1;
+    }
+    
+    .chart-header .chart-title {
+      color: #0F766E;
+    }
   }
   
   .chart-header {
@@ -1215,21 +1455,67 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.04);
     
     .chart-title {
       font-size: 16px;
       font-weight: 600;
       color: var(--text-primary);
       margin: 0;
+      transition: color 0.25s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      
+      // 标题前的装饰点
+      &::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        background: linear-gradient(135deg, #0F766E, #14B8A6);
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+    }
+    
+    .chart-actions {
+      .el-button {
+        transition: all 0.2s ease;
+        
+        &:hover {
+          color: #0F766E;
+          background: rgba(15, 118, 110, 0.08);
+        }
+      }
     }
   }
   
   .chart-container {
     height: 280px;
     width: 100%;
+    position: relative;
+    
+    // 加载时的渐变背景
+    &.loading::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        90deg,
+        transparent,
+        rgba(15, 118, 110, 0.05),
+        transparent
+      );
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+    }
   }
 }
 
+// ============================================
+// SubTask 5.3: 快捷操作卡片优化
+// ============================================
 .quick-actions-section {
   margin-bottom: 24px;
   
@@ -1255,16 +1541,66 @@ onBeforeUnmount(() => {
     align-items: center;
     gap: 16px;
     cursor: pointer;
-    transition: all 0.3s ease;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 
+      0 1px 3px rgba(0, 0, 0, 0.04),
+      0 2px 8px rgba(0, 0, 0, 0.02);
+    position: relative;
+    overflow: hidden;
+    animation: fadeInUp 0.5s ease-out backwards;
     
+    // 交错入场动画
+    @for $i from 1 through 4 {
+      &:nth-child(#{$i}) {
+        animation-delay: #{0.3 + $i * 0.06}s;
+      }
+    }
+    
+    // 点击涟漪效果容器
+    &::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle, rgba(15, 118, 110, 0.1) 0%, transparent 70%);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    
+    // 悬停效果
     &:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+      transform: translateY(-3px);
+      box-shadow: 
+        0 8px 20px rgba(0, 0, 0, 0.08),
+        0 4px 12px rgba(0, 0, 0, 0.04);
+      
+      &::before {
+        opacity: 1;
+      }
+      
+      .action-icon {
+        transform: scale(1.08);
+        box-shadow: 
+          0 6px 16px rgba(0, 0, 0, 0.2),
+          inset 0 1px 0 rgba(255, 255, 255, 0.2);
+      }
       
       .action-arrow {
         opacity: 1;
-        transform: translateX(4px);
+        transform: translateX(6px);
+      }
+      
+      .action-title {
+        color: #0F766E;
+      }
+    }
+    
+    // 点击反馈
+    &:active {
+      transform: translateY(-1px);
+      transition-duration: 0.1s;
+      
+      .action-icon {
+        transform: scale(0.95);
       }
     }
     
@@ -1276,41 +1612,71 @@ onBeforeUnmount(() => {
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
+      box-shadow: 
+        0 3px 10px rgba(0, 0, 0, 0.15),
+        inset 0 1px 0 rgba(255, 255, 255, 0.2);
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+      
+      // 光泽效果
+      &::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 50%;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.25) 0%, transparent 100%);
+        border-radius: 12px 12px 0 0;
+        pointer-events: none;
+      }
       
       svg, :deep(.el-icon) {
         width: 24px;
         height: 24px;
         color: white;
+        position: relative;
+        z-index: 1;
+        transition: transform 0.25s ease;
       }
     }
     
     .action-content {
       flex: 1;
+      position: relative;
+      z-index: 1;
       
       .action-title {
         font-size: 15px;
         font-weight: 600;
         color: var(--text-primary);
         margin: 0 0 4px 0;
+        transition: color 0.25s ease;
       }
       
       .action-desc {
         font-size: 13px;
         color: var(--text-muted);
         margin: 0;
+        transition: color 0.25s ease;
       }
     }
     
     .action-arrow {
       width: 20px;
       height: 20px;
-      color: var(--text-muted);
+      color: #0F766E;
       opacity: 0;
-      transition: all 0.3s ease;
+      transform: translateX(-4px);
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      flex-shrink: 0;
     }
   }
 }
 
+// ============================================
+// SubTask 5.4: 待办事项列表优化
+// ============================================
 .todo-section {
   margin-bottom: 24px;
   
@@ -1345,13 +1711,26 @@ onBeforeUnmount(() => {
   border-radius: 16px;
   padding: 24px;
   height: 100%;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-shadow: 
+    0 1px 3px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.02);
+  transition: all 0.25s ease;
+  animation: fadeInUp 0.5s ease-out backwards;
+  animation-delay: 0.4s;
+  
+  &:hover {
+    box-shadow: 
+      0 6px 20px rgba(0, 0, 0, 0.06),
+      0 3px 10px rgba(0, 0, 0, 0.03);
+  }
   
   .todo-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.04);
     
     .todo-title-wrapper {
       display: flex;
@@ -1366,20 +1745,46 @@ onBeforeUnmount(() => {
       display: flex;
       align-items: center;
       justify-content: center;
+      transition: all 0.25s ease;
+      position: relative;
+      
+      // 光泽效果
+      &::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 50%;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, transparent 100%);
+        border-radius: 10px 10px 0 0;
+        pointer-events: none;
+      }
       
       svg {
         width: 20px;
         height: 20px;
+        position: relative;
+        z-index: 1;
+        transition: transform 0.25s ease;
       }
       
       &.pending {
-        background: rgba(245, 158, 11, 0.1);
+        background: rgba(245, 158, 11, 0.12);
         color: #F59E0B;
+        
+        svg {
+          animation: iconPulse 2s ease-in-out infinite;
+        }
       }
       
       &.warning {
-        background: rgba(239, 68, 68, 0.1);
+        background: rgba(239, 68, 68, 0.12);
         color: #EF4444;
+        
+        svg {
+          animation: iconPulse 1.5s ease-in-out infinite;
+        }
       }
     }
     
@@ -1395,15 +1800,20 @@ onBeforeUnmount(() => {
       align-items: center;
       gap: 4px;
       font-weight: 500;
+      transition: all 0.2s ease;
       
       .link-arrow {
         width: 16px;
         height: 16px;
-        transition: transform 0.2s ease;
+        transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
       }
       
-      &:hover .link-arrow {
-        transform: translateX(2px);
+      &:hover {
+        color: #0F766E;
+        
+        .link-arrow {
+          transform: translateX(4px);
+        }
       }
     }
   }
@@ -1418,12 +1828,14 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: center;
     padding: 40px 20px;
+    animation: fadeInUp 0.4s ease-out;
     
     .empty-icon {
       width: 48px;
       height: 48px;
       color: #10B981;
       margin-bottom: 12px;
+      animation: iconPulse 2s ease-in-out infinite;
     }
     
     p {
@@ -1436,7 +1848,7 @@ onBeforeUnmount(() => {
   .todo-list {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
   }
   
   .todo-item {
@@ -1445,27 +1857,74 @@ onBeforeUnmount(() => {
     align-items: center;
     padding: 14px 16px;
     background: var(--bg-secondary);
-    border-radius: 10px;
-    transition: all 0.2s ease;
+    border-radius: 12px;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+    animation: slideInRight 0.4s ease-out backwards;
+    
+    // 交错入场动画
+    @for $i from 1 through 5 {
+      &:nth-child(#{$i}) {
+        animation-delay: #{$i * 0.08}s;
+      }
+    }
+    
+    // 左侧装饰条
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: linear-gradient(180deg, #0F766E, #14B8A6);
+      opacity: 0;
+      transition: opacity 0.25s ease;
+    }
     
     &:hover {
       background: var(--bg-tertiary);
+      transform: translateX(4px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+      
+      &::before {
+        opacity: 1;
+      }
+      
+      .todo-item-content .todo-item-house {
+        color: #0F766E;
+      }
+    }
+    
+    // 删除动画状态
+    &.removing {
+      animation: slideOutRight 0.3s ease-out forwards;
     }
     
     .todo-item-content {
       display: flex;
       flex-direction: column;
       gap: 4px;
+      flex: 1;
+      min-width: 0;
       
       .todo-item-house {
         font-size: 14px;
         font-weight: 500;
         color: var(--text-primary);
+        transition: color 0.25s ease;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       
       .todo-item-tenant {
         font-size: 13px;
         color: var(--text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
     }
     
@@ -1473,10 +1932,32 @@ onBeforeUnmount(() => {
       font-size: 13px;
       font-weight: 500;
       color: #EF4444;
+      padding: 4px 10px;
+      background: rgba(239, 68, 68, 0.08);
+      border-radius: 6px;
+      flex-shrink: 0;
+      margin-left: 12px;
+    }
+    
+    :deep(.el-tag) {
+      flex-shrink: 0;
+      margin-left: 12px;
+      transition: all 0.2s ease;
     }
   }
 }
 
+// 删除动画关键帧
+@keyframes slideOutRight {
+  to {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+// ============================================
+// 响应式适配
+// ============================================
 @media screen and (max-width: 768px) {
   .dashboard-page {
     padding: 16px;
@@ -1506,6 +1987,45 @@ onBeforeUnmount(() => {
   
   .chart-container {
     height: 240px !important;
+  }
+  
+  .stat-card {
+    padding: 20px;
+    
+    .stat-info .stat-value {
+      font-size: 28px;
+    }
+    
+    .stat-icon-wrapper {
+      width: 48px;
+      height: 48px;
+      
+      .stat-icon {
+        width: 24px;
+        height: 24px;
+      }
+    }
+  }
+  
+  .action-card {
+    padding: 16px;
+    
+    .action-icon {
+      width: 42px;
+      height: 42px;
+    }
+  }
+}
+
+// ============================================
+// 暗色模式支持（可选）
+// ============================================
+@media (prefers-color-scheme: dark) {
+  .stat-card,
+  .chart-card,
+  .action-card,
+  .todo-card {
+    background: rgba(255, 255, 255, 0.95);
   }
 }
 </style>
