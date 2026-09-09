@@ -28,9 +28,12 @@ def get_static_folder():
         base_path = sys._MEIPASS
         static_folder = os.path.join(base_path, 'static')
     else:
-        # 开发模式或生产模式，使用项目根目录的 dist/static 目录
-        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        static_folder = os.path.join(base_path, 'dist', 'static')
+        # 开发模式或生产模式，使用项目根目录的 dist 目录
+        # Vite 构建的前端文件直接在 dist 目录下（js/, css/, assets/ 等）
+        # 使用当前文件的实际路径计算项目根目录
+        current_file = os.path.abspath(__file__)
+        base_path = os.path.dirname(os.path.dirname(current_file))
+        static_folder = os.path.join(base_path, 'dist')
     
     return static_folder
 
@@ -49,7 +52,9 @@ def get_frontend_dist_folder():
         return os.path.join(base_path, 'static')
     else:
         # 开发模式或生产模式，index.html 位于 dist 目录
-        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # 使用当前文件的实际路径计算项目根目录
+        current_file = os.path.abspath(__file__)
+        base_path = os.path.dirname(os.path.dirname(current_file))
         return os.path.join(base_path, 'dist')
 
 

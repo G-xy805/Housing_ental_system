@@ -1,0 +1,146 @@
+# ============================================
+# Docker 构建忽略文件
+# ============================================
+# 排除不需要打包到 Docker 镜像中的文件和目录
+# ============================================
+
+# Git 相关
+.git
+.gitignore
+.gitattributes
+
+# Python 相关
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+.tox/
+.nox/
+
+# Node.js 相关
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# 前端构建产物（会在 Docker 中重新构建）
+# dist/  # 注意：不排除 dist，因为可能在某些情况下需要
+
+# IDE 和编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# 系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# 日志文件
+logs/
+*.log
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+instance/
+
+# 上传文件（运行时生成）
+uploads/
+
+# 备份文件（运行时生成）
+backups/
+*.backup
+*.bak
+
+# 密钥文件（敏感信息）
+keys/
+*.pem
+*.key
+*.crt
+
+# 环境配置文件（包含敏感信息）
+.env
+.env.local
+.env.*.local
+
+# 测试相关
+tests/
+test/
+*.test.js
+*.spec.js
+__tests__/
+coverage/
+
+# 文档文件
+*.md
+!README.md
+docs/
+
+# Docker 相关（避免递归）
+docker/
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# CI/CD 配置
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+azure-pipelines.yml
+
+# 构建脚本
+build_exe.py
+*.bat
+*.sh
+start-*.bat
+
+# PyInstaller 相关
+*.spec
+build/
+dist/
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+*.temp
+
+# 打包文件
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# 其他
+.editorconfig
+.eslintrc*
+.prettierrc*
+.stylelintrc*
+browserslist

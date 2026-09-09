@@ -1,0 +1,273 @@
+# ============================================
+# 房屋租赁系统 - Docker Compose 服务编排
+# ============================================
+# 服务列表:
+#   - backend: Flask 后端服务
+#   - mysql: MySQL 数据库服务
+#   - redis: Redis 缓存服务
+#   - nginx: Nginx 反向代理服务
+# ============================================
+
+version: '3.8'
+
+# ============================================
+# 网络配置
+# ============================================
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true  # 内部网络，外部无法直接访问
+
+# ============================================
+# 数据卷配置
+# ============================================
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  uploads_data:
+    driver: local
+  backups_data:
+    driver: local
+  logs_data:
+    driver: local
+  keys_data:
+    driver: local
+
+# ============================================
+# 服务配置
+# ============================================
+services:
+  # ------------------------------------------
+  # MySQL 数据库服务
+  # ------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: housing_mysql
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password_change_me}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-housing_rental}
+      MYSQL_USER: ${MYSQL_USER:-housing_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-housing_password_change_me}
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+      - ./docker/mysql/conf.d:/etc/mysql/conf.d:ro
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root_password_change_me}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --max_connections=500
+      - --innodb_buffer_pool_size=256M
+      - --innodb_log_file_size=64M
+      - --innodb_flush_log_at_trx_commit=2
+      - --innodb_flush_method=O_DIRECT
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ------------------------------------------
+  # Redis 缓存服务
+  # ------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: housing_redis
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_password_change_me}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_password_change_me}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    command:
+      - redis-server
+      - --appendonly yes
+      - --maxmemory 256mb
+      - --maxmemory-policy allkeys-lru
+      - --requirepass ${REDIS_PASSWORD:-redis_password_change_me}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ------------------------------------------
+  # Flask 后端服务
+  # ------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: housing-rental-system:latest
+    container_name: housing_backend
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Flask 配置
+      FLASK_ENV: production
+      FLASK_APP: app
+      FLASK_DEBUG: "False"
+      
+      # 安全密钥（生产环境必须修改）
+      SECRET_KEY: ${SECRET_KEY:-change-this-secret-key-in-production}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-jwt-secret-key-in-production}
+      
+      # 数据库配置
+      DB_TYPE: mysql
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-housing_rental}
+      MYSQL_USER: ${MYSQL_USER:-housing_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-housing_password_change_me}
+      MYSQL_CHARSET: utf8mb4
+      
+      # 数据库连接池配置
+      SQLALCHEMY_POOL_SIZE: ${SQLALCHEMY_POOL_SIZE:-10}
+      SQLALCHEMY_MAX_OVERFLOW: ${SQLALCHEMY_MAX_OVERFLOW:-10}
+      SQLALCHEMY_POOL_RECYCLE: ${SQLALCHEMY_POOL_RECYCLE:-3600}
+      SQLALCHEMY_POOL_TIMEOUT: ${SQLALCHEMY_POOL_TIMEOUT:-30}
+      SQLALCHEMY_POOL_PRE_PING: "True"
+      
+      # Redis 配置
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_password_change_me}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_MAX_CONNECTIONS: ${REDIS_MAX_CONNECTIONS:-50}
+      
+      # 缓存配置
+      CACHE_ENABLED: ${CACHE_ENABLED:-True}
+      CACHE_DEFAULT_TIMEOUT: ${CACHE_DEFAULT_TIMEOUT:-300}
+      CACHE_KEY_PREFIX: ${CACHE_KEY_PREFIX:-housing_rental:}
+      
+      # CORS 配置
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://localhost:80,http://localhost:5000}
+      
+      # 文件上传配置
+      MAX_CONTENT_LENGTH: ${MAX_CONTENT_LENGTH:-104857600}
+      
+      # 备份配置
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      BACKUP_ENCRYPTION_ENABLED: ${BACKUP_ENCRYPTION_ENABLED:-True}
+      BACKUP_COMPRESSION_ENABLED: ${BACKUP_COMPRESSION_ENABLED:-True}
+      BACKUP_AUTO_ENABLED: ${BACKUP_AUTO_ENABLED:-True}
+      BACKUP_AUTO_TIME: ${BACKUP_AUTO_TIME:-02:00}
+      
+      # 日志配置
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SLOW_QUERY_THRESHOLD: ${SLOW_QUERY_THRESHOLD:-1.0}
+      SLOW_QUERY_MONITOR_ENABLED: ${SLOW_QUERY_MONITOR_ENABLED:-True}
+      
+      # 监控配置
+      PROMETHEUS_ENABLED: ${PROMETHEUS_ENABLED:-True}
+      
+      # 加密配置
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-change-this-encryption-key-in-production}
+      AES_PRIMARY_KEY: ${AES_PRIMARY_KEY:-}
+      AES_KEY_ROTATION_DAYS: ${AES_KEY_ROTATION_DAYS:-90}
+      
+      # 密码策略配置
+      PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-8}
+      PASSWORD_REQUIRE_UPPERCASE: ${PASSWORD_REQUIRE_UPPERCASE:-True}
+      PASSWORD_REQUIRE_LOWERCASE: ${PASSWORD_REQUIRE_LOWERCASE:-True}
+      PASSWORD_REQUIRE_DIGIT: ${PASSWORD_REQUIRE_DIGIT:-True}
+      PASSWORD_REQUIRE_SPECIAL: ${PASSWORD_REQUIRE_SPECIAL:-True}
+      PASSWORD_EXPIRE_DAYS: ${PASSWORD_EXPIRE_DAYS:-90}
+      PASSWORD_HISTORY_COUNT: ${PASSWORD_HISTORY_COUNT:-5}
+      
+      # HTTPS 安全配置
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-False}
+      REMEMBER_COOKIE_SECURE: ${REMEMBER_COOKIE_SECURE:-False}
+      SESSION_COOKIE_HTTPONLY: ${SESSION_COOKIE_HTTPONLY:-True}
+      
+      # 启动任务配置
+      STARTUP_TASKS_ENABLED: ${STARTUP_TASKS_ENABLED:-True}
+      
+      # 服务器配置
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 5000
+    volumes:
+      - uploads_data:/app/uploads
+      - backups_data:/app/backups
+      - logs_data:/app/logs
+      - keys_data:/app/keys
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ------------------------------------------
+  # Nginx 反向代理服务（可选）
+  # ------------------------------------------
+  nginx:
+    image: nginx:alpine
+    container_name: housing_nginx
+    restart: unless-stopped
+    networks:
+      - frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+      - uploads_data:/app/uploads:ro
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - nginx  # 使用 --profile nginx 启用此服务

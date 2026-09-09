@@ -1,0 +1,209 @@
+# ============================================================================
+# 房屋租赁系统 - Systemd 服务配置文件
+# ============================================================================
+#
+# 功能说明:
+#   - 自动启动和管理 Flask/Gunicorn 应用
+#   - 配置自动重启策略
+#   - 日志输出到 journald
+#   - 环境变量管理
+#
+# 安装方法:
+#   1. 复制此文件到 /etc/systemd/system/ 目录
+#      sudo cp housing-rental.service /etc/systemd/system/
+#
+#   2. 重新加载 systemd 配置
+#      sudo systemctl daemon-reload
+#
+#   3. 启用服务（开机自启）
+#      sudo systemctl enable housing-rental
+#
+#   4. 启动服务
+#      sudo systemctl start housing-rental
+#
+#   5. 检查服务状态
+#      sudo systemctl status housing-rental
+#
+# 管理命令:
+#   启动:   sudo systemctl start housing-rental
+#   停止:   sudo systemctl stop housing-rental
+#   重启:   sudo systemctl restart housing-rental
+#   状态:   sudo systemctl status housing-rental
+#   日志:   sudo journalctl -u housing-rental -f
+#   禁用:   sudo systemctl disable housing-rental
+#
+# ============================================================================
+
+[Unit]
+# 服务描述
+Description=Housing Rental System - 房屋租赁管理系统
+Documentation=https://github.com/your-org/housing-rental-system
+
+# 服务依赖
+# network.target: 确保网络已就绪
+# network-online.target: 确保网络连接已建立（适用于需要远程数据库的场景）
+After=network.target network-online.target
+
+# 服务启动顺序依赖
+# 如果使用 MySQL/PostgreSQL，可以添加数据库服务依赖
+# After=network.target network-online.target mysql.service postgresql.service
+# Requires=mysql.service  # 如果必须依赖 MySQL
+# Wants=postgresql.service  # 如果可选依赖 PostgreSQL
+
+# 如果使用 Redis 缓存
+# After=network.target network-online.target redis.service
+# Wants=redis.service
+
+[Service]
+# ============================================================================
+# 服务类型配置
+# ============================================================================
+# 服务类型: simple - 服务启动后即认为就绪
+# notify - 服务通过 sd_notify 通知就绪状态
+# forking - 服务通过 fork 方式启动
+Type=simple
+
+# ============================================================================
+# 用户和组配置
+# ============================================================================
+# 运行服务的用户（建议创建专用用户）
+# 创建用户: sudo useradd -r -s /bin/false housing
+User=housing
+Group=housing
+
+# ============================================================================
+# 工作目录配置
+# ============================================================================
+# 应用根目录（请根据实际部署路径修改）
+WorkingDirectory=/opt/housing-rental
+
+# ============================================================================
+# 环境变量配置
+# ============================================================================
+# 环境变量文件路径
+EnvironmentFile=/opt/housing-rental/.env
+
+# 额外的环境变量
+Environment="FLASK_ENV=production"
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONPATH=/opt/housing-rental"
+
+# ============================================================================
+# 启动命令配置
+# ============================================================================
+# 方式一: 使用 Gunicorn（推荐用于生产环境）
+# 优点: 多进程、高性能、支持并发
+ExecStart=/opt/housing-rental/.venv/bin/gunicorn \
+    --config /opt/housing-rental/deploy/gunicorn.conf.py \
+    --bind 0.0.0.0:5000 \
+    "run:create_app()"
+
+# 方式二: 使用 Waitress（适用于 Windows 或简单部署）
+# ExecStart=/opt/housing-rental/.venv/bin/python run_production.py
+
+# 方式三: 使用 Flask 内置服务器（仅用于开发测试，不推荐生产环境）
+# ExecStart=/opt/housing-rental/.venv/bin/python -m flask run --host=0.0.0.0 --port=5000
+
+# ============================================================================
+# 重启策略配置
+# ============================================================================
+# 自动重启策略
+# always: 总是重启
+# on-failure: 仅在失败时重启
+# on-success: 仅在成功退出时重启
+Restart=always
+
+# 重启延迟时间（秒）
+# 避免频繁重启导致系统负载过高
+RestartSec=10
+
+# 启动超时时间（秒）
+# 超过此时间未启动成功则认为失败
+TimeoutStartSec=300
+
+# 停止超时时间（秒）
+# 发送 SIGTERM 后等待服务优雅关闭的时间
+TimeoutStopSec=30
+
+# 最大重启次数限制
+# 在指定时间窗口内最多重启次数，超过则停止重启
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# ============================================================================
+# 进程信号配置
+# ============================================================================
+# 停止服务时发送的信号
+# SIGTERM: 优雅关闭（推荐）
+KillSignal=SIGTERM
+
+# 强制终止信号
+# 如果 SIGTERM 后进程仍未退出，发送此信号
+KillMode=mixed
+
+# 发送 SIGTERM 后等待多久发送 SIGKILL
+FinalKillSignal=SIGKILL
+
+# ============================================================================
+# 日志配置
+# ============================================================================
+# 标准输出日志
+# journal: 输出到 journald
+# syslog: 输出到 syslog
+# null: 丢弃日志
+StandardOutput=journal
+
+# 标准错误日志
+StandardError=journal
+
+# Syslog 标识符
+SyslogIdentifier=housing-rental
+
+# ============================================================================
+# 资源限制配置
+# ============================================================================
+# 内存限制（超出会被 OOM Killer 终止）
+# MemoryMax=1G
+# MemoryHigh=800M
+
+# CPU 配额
+# CPUQuota=200%  # 允许使用 2 个 CPU 核心
+
+# 进程数限制
+# LimitNPROC=100
+
+# 文件描述符限制
+LimitNOFILE=65535
+
+# ============================================================================
+# 安全加固配置（可选）
+# ============================================================================
+# 保护系统目录
+# ProtectSystem=strict
+
+# 保护 home 目录
+# ProtectHome=true
+
+# 只读绑定挂载
+# ReadOnlyPaths=/etc /usr
+
+# 可写目录
+# ReadWritePaths=/opt/housing-rental/logs /opt/housing-rental/uploads /opt/housing-rental/backups
+
+# 禁止特权提升
+# NoNewPrivileges=true
+
+# ============================================================================
+# 其他配置
+# ============================================================================
+# 是否允许服务被手动停止
+# RemainAfterExit=no
+
+# 服务就绪通知超时
+# TimeoutSec=300
+
+[Install]
+# 服务安装配置
+# multi-user.target: 多用户模式（命令行模式）
+# graphical.target: 图形界面模式
+WantedBy=multi-user.target

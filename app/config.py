@@ -29,6 +29,51 @@ def get_base_dir():
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _build_database_uri():
+    """
+    根据环境变量构建数据库连接字符串。
+    
+    支持的数据库类型：
+    - sqlite: SQLite 数据库（默认）
+    - mysql: MySQL 数据库
+    - postgresql: PostgreSQL 数据库
+    
+    Returns:
+        str: 数据库连接字符串
+    """
+    db_type = os.getenv('DB_TYPE', 'sqlite').lower()
+    
+    # 如果直接指定了 DATABASE_URI，优先使用
+    if os.getenv('DATABASE_URI'):
+        return os.getenv('DATABASE_URI')
+    
+    if db_type == 'mysql':
+        # MySQL 配置
+        mysql_host = os.getenv('MYSQL_HOST', 'localhost')
+        mysql_port = os.getenv('MYSQL_PORT', '3306')
+        mysql_database = os.getenv('MYSQL_DATABASE', 'housing_rental')
+        mysql_user = os.getenv('MYSQL_USER', 'root')
+        mysql_password = os.getenv('MYSQL_PASSWORD', '')
+        mysql_charset = os.getenv('MYSQL_CHARSET', 'utf8mb4')
+        
+        return f'mysql+pymysql://{mysql_user}:{mysql_password}@{mysql_host}:{mysql_port}/{mysql_database}?charset={mysql_charset}'
+    
+    elif db_type == 'postgresql':
+        # PostgreSQL 配置
+        pg_host = os.getenv('POSTGRES_HOST', 'localhost')
+        pg_port = os.getenv('POSTGRES_PORT', '5432')
+        pg_database = os.getenv('POSTGRES_DATABASE', 'housing_rental')
+        pg_user = os.getenv('POSTGRES_USER', 'postgres')
+        pg_password = os.getenv('POSTGRES_PASSWORD', '')
+        
+        return f'postgresql://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_database}'
+    
+    else:
+        # SQLite 配置（默认）
+        base_dir = get_base_dir()
+        return f'sqlite:///{os.path.join(base_dir, "housing_rental.db")}'
+
+
 class Config:
     """基础配置类"""
     
@@ -39,10 +84,13 @@ class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
     
     # 数据库配置
-    DATABASE_URI = os.getenv('DATABASE_URI', f'sqlite:///{os.path.join(BASE_DIR, "housing_rental.db")}')
+    DATABASE_URI = _build_database_uri()
     SQLALCHEMY_DATABASE_URI = DATABASE_URI  # Flask-SQLAlchemy 需要这个
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ECHO = os.getenv('SQLALCHEMY_ECHO', 'False').lower() == 'true'
+    
+    # 数据库类型（用于日志和调试）
+    DB_TYPE = os.getenv('DB_TYPE', 'sqlite').lower()
 
     # 数据库连接池配置
     # 连接池大小：保持的连接数量
@@ -247,17 +295,40 @@ class ProductionConfig(Config):
     SQLALCHEMY_ECHO = False
 
 
+# 验证生产环境配置并设置密钥
+def _validate_production_config():
+    """验证生产环境配置"""
+    secret_key = os.getenv('SECRET_KEY')
+    if not secret_key or secret_key == 'dev-secret-key-change-in-production':
+        raise ValueError('生产环境必须设置 SECRET_KEY 环境变量')
+    ProductionConfig.SECRET_KEY = secret_key
+    
+    jwt_secret_key = os.getenv('JWT_SECRET_KEY')
+    if not jwt_secret_key or jwt_secret_key == 'jwt-secret-key-change-in-production':
+        raise ValueError('生产环境必须设置 JWT_SECRET_KEY 环境变量')
+    ProductionConfig.JWT_SECRET_KEY = jwt_secret_key
+
+
+# 尝试验证配置（仅在创建应用时验证）
+try:
+    _validate_production_config()
+except ValueError:
+    pass  # 在创建应用时会再次验证
+
+
 # 生产环境路径配置（支持 PyInstaller 打包）
 # 在类定义后设置，确保路径动态计算
 def _init_production_paths():
     """初始化生产环境路径配置"""
     base_dir = get_base_dir()
+    db_type = os.getenv('DB_TYPE', 'sqlite').lower()
     
-    # 数据库路径：{base_dir}/data/housing_rental.db
-    db_dir = os.path.join(base_dir, 'data')
-    os.makedirs(db_dir, exist_ok=True)
-    ProductionConfig.SQLALCHEMY_DATABASE_URI = f'sqlite:///{os.path.join(db_dir, "housing_rental.db")}'
-    ProductionConfig.DATABASE_URI = ProductionConfig.SQLALCHEMY_DATABASE_URI
+    # SQLite 数据库路径（仅在使用 SQLite 时设置）
+    if db_type == 'sqlite':
+        db_dir = os.path.join(base_dir, 'data')
+        os.makedirs(db_dir, exist_ok=True)
+        # SQLite 数据库路径由 _build_database_uri() 函数处理
+        # 这里只确保目录存在
     
     # 上传目录：{base_dir}/uploads
     upload_dir = os.path.join(base_dir, 'uploads')

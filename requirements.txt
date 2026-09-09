@@ -33,11 +33,17 @@ redis==5.0.1
 marshmallow==3.20.1
 marshmallow-sqlalchemy==0.29.0
 
-# Database Driver (SQLite built-in, MySQL/PostgreSQL optional)
-# For MySQL: pip install pymysql
-# For PostgreSQL: pip install psycopg2-binary
+# Database Drivers
+# SQLite (built-in, no installation required)
+# MySQL driver
+pymysql==1.1.0
+# PostgreSQL driver
+psycopg2-binary==2.9.9
 
-# Production Server (Windows compatible)
+# Production Server
+# Gunicorn (Linux/macOS production server)
+gunicorn==21.2.0
+# Waitress (Windows compatible production server)
 waitress==2.1.2
 
 # Build & Packaging

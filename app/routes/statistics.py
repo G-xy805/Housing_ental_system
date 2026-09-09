@@ -279,6 +279,11 @@ def get_house_statistics():
         
         result = {}
         
+        # 获取数据库类型（URI 格式: mysql+pymysql://... 或 sqlite:///...）
+        from flask import current_app
+        db_uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
+        db_type = 'mysql' if 'mysql' in db_uri else 'sqlite'
+        
         # 按状态分类
         if group_by == 'status':
             status_stats = db.session.query(
@@ -343,16 +348,27 @@ def get_house_statistics():
                 month_start = month_date.replace(day=1)
                 month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
                 
-                # 查询该月的出租房源数
-                rented_count = db.session.query(func.count(House.id)).filter(
-                    House.status == 'rented',
-                    func.strftime('%Y-%m', House.created_at) == month_date.strftime('%Y-%m')
-                ).scalar() or 0
-                
-                # 查询该月总房源数
-                total_count = db.session.query(func.count(House.id)).filter(
-                    func.strftime('%Y-%m', House.created_at) <= month_date.strftime('%Y-%m')
-                ).scalar() or 1
+                # 数据库兼容的日期格式化
+                if db_type == 'mysql':
+                    # MySQL 使用 DATE_FORMAT
+                    rented_count = db.session.query(func.count(House.id)).filter(
+                        House.status == 'rented',
+                        func.date_format(House.created_at, '%Y-%m') == month_date.strftime('%Y-%m')
+                    ).scalar() or 0
+                    
+                    total_count = db.session.query(func.count(House.id)).filter(
+                        func.date_format(House.created_at, '%Y-%m') <= month_date.strftime('%Y-%m')
+                    ).scalar() or 1
+                else:
+                    # SQLite 使用 strftime
+                    rented_count = db.session.query(func.count(House.id)).filter(
+                        House.status == 'rented',
+                        func.strftime('%Y-%m', House.created_at) == month_date.strftime('%Y-%m')
+                    ).scalar() or 0
+                    
+                    total_count = db.session.query(func.count(House.id)).filter(
+                        func.strftime('%Y-%m', House.created_at) <= month_date.strftime('%Y-%m')
+                    ).scalar() or 1
                 
                 occupancy_rate = rented_count / total_count if total_count > 0 else 0
                 
@@ -693,15 +709,34 @@ def get_tenant_statistics():
         
         result['contract_renewal_rate'] = round(renewal_rate, 4)
         
-        # 平均租期
-        avg_duration_query = db.session.query(
-            func.avg(
-                (func.julianday(Contract.end_date) - 
-                 func.julianday(Contract.start_date)) / 30
+        # 平均租期 - 使用数据库兼容的日期计算方法
+        # MySQL 使用 DATEDIFF，SQLite 使用 julianday
+        from sqlalchemy import case, text
+        from flask import current_app
+        
+        # 获取数据库类型（URI 格式: mysql+pymysql://... 或 sqlite:///...）
+        db_uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
+        db_type = 'mysql' if 'mysql' in db_uri else 'sqlite'
+        
+        if db_type == 'mysql':
+            # MySQL 使用 DATEDIFF
+            avg_duration_query = db.session.query(
+                func.avg(
+                    func.datediff(Contract.end_date, Contract.start_date) / 30
+                )
+            ).filter(
+                Contract.status.in_(['active', 'expired'])
             )
-        ).filter(
-            Contract.status.in_(['active', 'expired'])
-        )
+        else:
+            # SQLite 使用 julianday
+            avg_duration_query = db.session.query(
+                func.avg(
+                    (func.julianday(Contract.end_date) - 
+                     func.julianday(Contract.start_date)) / 30
+                )
+            ).filter(
+                Contract.status.in_(['active', 'expired'])
+            )
         
         avg_duration = avg_duration_query.scalar() or 0
         
@@ -753,6 +788,11 @@ def get_contract_statistics():
     """
     try:
         result = {}
+        
+        # 获取数据库类型（URI 格式: mysql+pymysql://... 或 sqlite:///...）
+        from flask import current_app
+        db_uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
+        db_type = 'mysql' if 'mysql' in db_uri else 'sqlite'
         
         # 合同总数和状态统计
         total_contracts = Contract.query.count()
@@ -823,15 +863,24 @@ def get_contract_statistics():
         renewal_rate = renewed_count / len(expired_contracts_list) if len(expired_contracts_list) > 0 else 0
         result['renewal_rate'] = round(renewal_rate, 4)
         
-        # 平均租期（月）
-        avg_duration_query = db.session.query(
-            func.avg(
-                (func.julianday(Contract.end_date) - 
-                 func.julianday(Contract.start_date)) / 30
+        # 平均租期（月）- 使用数据库兼容的日期计算方法
+        if db_type == 'mysql':
+            avg_duration_query = db.session.query(
+                func.avg(
+                    func.datediff(Contract.end_date, Contract.start_date) / 30
+                )
+            ).filter(
+                Contract.status.in_(['active', 'expired'])
             )
-        ).filter(
-            Contract.status.in_(['active', 'expired'])
-        )
+        else:
+            avg_duration_query = db.session.query(
+                func.avg(
+                    (func.julianday(Contract.end_date) - 
+                     func.julianday(Contract.start_date)) / 30
+                )
+            ).filter(
+                Contract.status.in_(['active', 'expired'])
+            )
         
         avg_duration = avg_duration_query.scalar() or 0
         result['average_duration'] = round(avg_duration, 2)
